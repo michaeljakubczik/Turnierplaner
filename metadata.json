@@ -1,0 +1,5 @@
+{
+  "name": "AI Tournament Planner",
+  "description": "A professional tournament schedule generator that creates conflict-free, balanced plans based on team availability and match requirements.",
+  "requestFramePermissions": []
+}
