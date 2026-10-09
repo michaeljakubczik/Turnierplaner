@@ -1,5 +1,5 @@
 {
   "name": "AI Tournament Planner",
-  "description": "A professional tournament schedule generator that creates conflict-free, balanced plans based on team availability and match requirements.",
+  "description": "Erstellen Sie mit KI-Präzision faire Turnierpläne! Die App berücksichtigt Team-Verfügbarkeiten, minimiert die Anzahl der Teams pro Spieltag und bietet flexible Modi bis 4x Paarung. Inklusive Validierungsbericht und Excel-Export für die einfache Organisation. Schnell, konfliktfrei und intuitiv bedienbar.",
   "requestFramePermissions": []
 }
