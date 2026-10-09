@@ -168,7 +168,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       if (kind === 'date') return { ...prev, dates: exists ? prev.dates.filter(d => d.id !== date.id) : [...prev.dates, date] };
       const key = kind === 'home' ? 'homeAvailability' : 'availability';
       return { ...prev, dates: exists ? prev.dates : [...prev.dates, date],
-        [key]: { ...prev[key], [activeTeamId]: { ...prev[key][activeTeamId], [date.id]: !prev[key][activeTeamId]?.[date.id] } } };
+        [key]: { ...prev[key], [activeTeamId]: { ...prev[key][activeTeamId], [date.id]: !prev[key][activeTeamId]?.[date.id] } },
+        ...(kind === 'home' && !prev.homeAvailability[activeTeamId]?.[date.id] ? { availability: { ...prev.availability, [activeTeamId]: { ...prev.availability[activeTeamId], [date.id]: true } } } : {}) };
     });
   };
 
@@ -286,7 +287,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           ...prev.homeAvailability[teamId],
           [dateId]: !prev.homeAvailability[teamId]?.[dateId]
         }
-      }
+      },
+      ...(!prev.homeAvailability[teamId]?.[dateId] ? { availability: { ...prev.availability, [teamId]: { ...prev.availability[teamId], [dateId]: true } } } : {})
     }));
   };
 
