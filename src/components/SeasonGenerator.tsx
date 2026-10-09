@@ -151,6 +151,23 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const seasonYear = draft.seasonYear ?? (Number(dates[0]?.value.slice(0, 4)) || new Date().getFullYear());
   const [calendarTeamId, setCalendarTeamId] = useState('');
   const [holidayRegions, setHolidayRegions] = useState<Region[]>([]);
+  const [availabilityUndo, setAvailabilityUndo] = useState<{ available: Availability; home: HomeAvailability; clearedAvailable: Availability; clearedHome: HomeAvailability } | null>(null);
+  const hasAvailabilityEntries = Object.values(availability).some(days => Object.values(days).some(Boolean)) || Object.values(homeAvailability).some(days => Object.values(days).some(Boolean));
+  const clearAvailability = () => {
+    const clearedAvailable: Availability = {};
+    const clearedHome: HomeAvailability = {};
+    setAvailabilityUndo({ available: availability, home: homeAvailability, clearedAvailable, clearedHome });
+    setDraft(prev => ({ ...prev, availability: clearedAvailable, homeAvailability: clearedHome }));
+  };
+  const undoClearAvailability = () => {
+    if (!availabilityUndo) return;
+    setDraft(prev => ({ ...prev, availability: availabilityUndo.available, homeAvailability: availabilityUndo.home }));
+    setAvailabilityUndo(null);
+  };
+  useEffect(() => {
+    if (availabilityUndo && (draft.availability !== availabilityUndo.clearedAvailable || draft.homeAvailability !== availabilityUndo.clearedHome)) setAvailabilityUndo(null);
+  }, [draft.availability, draft.homeAvailability, availabilityUndo]);
+
   const holidayPeriods = useMemo(() => Object.fromEntries(holidayRegions.map(region => [region, calendarPeriods(seasonYear, region)])) as Partial<Record<Region, ReturnType<typeof calendarPeriods>>>, [seasonYear, holidayRegions]);
   const holidayColors: Record<Region, string> = { HB: '#fb923c', HH: '#c084fc', NI: '#facc15' };
 
@@ -685,7 +702,11 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               <label>Jahr <select aria-label="Saisonjahr" value={seasonYear} onChange={e => setDraft(prev => ({ ...prev, seasonYear: Number(e.target.value), dates: [], availability: {}, homeAvailability: {} }))} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{Array.from({ length: 12 }, (_, i) => new Date().getFullYear() - 1 + i).concat(seasonYear).filter((v, i, a) => a.indexOf(v) === i).sort().map(y => <option key={y}>{y}</option>)}</select></label>
               <label>Team <select aria-label="Kalenderteam" value={activeTeamId} onChange={e => setCalendarTeamId(e.target.value)} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
               <span className="text-xs text-gray-400">{dates.length} Spieltage ausgewählt</span>
+              <button type="button" onClick={clearAvailability} disabled={!hasAvailabilityEntries} className="text-xs rounded-lg px-3 py-2 bg-red-500/15 text-red-300 border border-red-400/30 disabled:opacity-40">Alle Einträge löschen</button>
+              {availabilityUndo && <button type="button" onClick={undoClearAvailability} className="text-xs rounded-lg px-3 py-2 bg-blue-500/20 text-blue-200 border border-blue-400/30">Rückgängig</button>}
+
             </div>
+            {availabilityUndo && <p role="status" className="text-xs text-blue-200">Alle Verfügbarkeiten und Heimspiel-Auswahlen wurden gelöscht. Rückgängig ist bis zur nächsten Änderung dieser Einträge möglich.</p>}
             <p className="text-xs text-gray-400">Datum = Spieltag auswählen. V = Team verfügbar (blau). H = Heimspiel möglich (grün). Verfügbarkeit oder Heimspiel wählen aktiviert den Termin. Ein Jahreswechsel startet eine neue Terminauswahl.</p>
             <div className="flex flex-wrap gap-3 items-center text-xs">
               <span>Ferien & Feiertage einblenden:</span>
