@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Plus, 
   Trash2, 
@@ -20,6 +20,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { calendarPeriods, periodMarks, hasVacationData, regionNames, type Region } from '../lib/seasonCalendar';
+import { distanceKm, hasLongJourney, findHomePlaces, type HomePlace } from '../lib/teamTravel';
 import { usePersistentState } from '../hooks/usePersistentState';
 
 // --- Types ---
@@ -28,6 +29,8 @@ type Team = {
   id: string;
   name: string;
   maxCapacity: number;
+  homeLocationQuery?: string;
+  homePlace?: HomePlace;
 };
 
 type MatchMode = 1 | 2 | 3 | 4;
@@ -135,7 +138,44 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     initialDraft
   );
 
+  const [placeChoices, setPlaceChoices] = useState<Record<string, HomePlace[]>>({});
+  const [placeMessages, setPlaceMessages] = useState<Record<string, string>>({});
+  const placeRequests = useRef<Record<string, AbortController>>({});
+  useEffect(() => () => (Object.values(placeRequests.current) as AbortController[]).forEach(request => request.abort()), []);
+  const updateHomeLocation = (id: string, query: string) => {
+    placeRequests.current[id]?.abort();
+    setPlaceChoices(prev => ({ ...prev, [id]: [] }));
+    setPlaceMessages(prev => ({ ...prev, [id]: '' }));
+    setDraft(prev => ({ ...prev, teams: prev.teams.map(t => t.id === id ? { ...t, homeLocationQuery: query, homePlace: undefined } : t) }));
+  };
+  const chooseHomePlace = (id: string, place: HomePlace) => {
+    setDraft(prev => ({ ...prev, teams: prev.teams.map(t => t.id === id ? { ...t, homeLocationQuery: place.label, homePlace: place } : t) }));
+    setPlaceChoices(prev => ({ ...prev, [id]: [] }));
+    setPlaceMessages(prev => ({ ...prev, [id]: '' }));
+  };
+  const resolveHomeLocation = async (team: Team) => {
+    const query = team.homeLocationQuery?.trim();
+    if (!query || team.homePlace) return;
+    placeRequests.current[team.id]?.abort();
+    const request = new AbortController();
+    placeRequests.current[team.id] = request;
+    setPlaceMessages(prev => ({ ...prev, [team.id]: 'Ort wird gesucht …' }));
+    try {
+      const choices = await findHomePlaces(query, request.signal);
+      if (request.signal.aborted) return;
+      if (choices.length === 1) chooseHomePlace(team.id, choices[0]);
+      else {
+        setPlaceChoices(prev => ({ ...prev, [team.id]: choices }));
+        setPlaceMessages(prev => ({ ...prev, [team.id]: choices.length ? 'Bitte den passenden Ort auswählen:' : 'Kein Ort gefunden. Bitte Ort mit Postleitzahl oder Adresse eingeben.' }));
+      }
+    } catch (error) {
+      if (!request.signal.aborted) setPlaceMessages(prev => ({ ...prev, [team.id]: error instanceof Error ? error.message : 'Ortssuche fehlgeschlagen.' }));
+    }
+  };
+
   const handleReset = () => {
+    (Object.values(placeRequests.current) as AbortController[]).forEach(request => request.abort());
+    setPlaceChoices({}); setPlaceMessages({});
     resetDraft();
     setSchedule(null);
     setReport(null);
@@ -224,6 +264,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
   const removeTeam = (id: string) => {
     if (teams.length <= 2) return;
+    placeRequests.current[id]?.abort();
     setDraft(prev => {
       const newTeams = prev.teams.filter(t => t.id !== id);
       const newAvail = { ...prev.availability };
@@ -339,6 +380,13 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       if (allTeamsOnFinalDay && !finalDayCandidate) {
         setError('Kein gemeinsamer Saisonabschluss möglich: Es gibt keinen ausgewählten Termin, an dem alle Teams verfügbar sind.'); setIsGenerating(false); return;
       }
+      const missingPlaces = teams.filter(t => !t.homePlace);
+      if (missingPlaces.length) {
+        setError(`Bitte zuerst den Heimspielort für ${missingPlaces.map(t => t.name).join(', ')} eingeben und einen gefundenen Ort auswählen. Erst dann kann die 100-km-Regel geprüft werden.`); setIsGenerating(false); return;
+      }
+      if (maxMatchesPerDay < 2 && !(allTeamsOnFinalDay && teams.length === 2 && matchMode === 1)) {
+        setError('Reguläre Spieltage benötigen mindestens zwei Spiele. Erhöhe „Max. Spiele pro Tag“ auf mindestens 2.'); setIsGenerating(false); return;
+      }
       const dates = seasonDates;
       if (!dates.length || dates.some(d => !/^\d{4}-\d{2}-\d{2}$/.test(d.value)) || new Set(dates.map(d => d.value)).size !== dates.length) {
         setError('Bitte mindestens einen Spieltag auswählen. Termine müssen gültig und eindeutig sein.'); setIsGenerating(false); return;
@@ -372,6 +420,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
       let bestSchedule: Schedule | null = null;
       let bestScore = Infinity;
+      let bestDayCount = Infinity;
       let iterations = 0;
       const MAX_ITERATIONS = 200000;
 
@@ -380,7 +429,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         const avg = counts.reduce((a, b) => a + b, 0) / Math.max(1, counts.length);
         const variance = counts.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / Math.max(1, counts.length);
         
-        let penalty = variance * 100;
+        // Secondary preferences; day count is compared separately and has priority.
+        let penalty = variance * 10 + counts.filter(count => count === 2).length * 500;
 
         const teamDays: Record<string, Set<string>> = {};
         const homeGameCounts: Record<string, number> = {};
@@ -406,6 +456,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           }
 
           Object.values(teamCounts).forEach(c => {
+            if (c === 1 && !(allTeamsOnFinalDay && d.id === finalDateId)) penalty += 250;
             if (c > maxMatchesPerTeamPerDay) penalty += 10000; // Hard constraint penalty
           });
         });
@@ -447,21 +498,74 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         const participants = new Set(matches.flatMap(m => [m.teamA, m.teamB]));
         const hosts = teams.filter(t => participants.has(t.id) && homeAvailability[t.id]?.[date.id] && t.maxCapacity >= participants.size);
         if (!hosts.length) return [];
-        hosts.sort((a, b) => Object.entries(current).filter(([d, entry]) => d !== date.id && entry.hostId === a.id).length - Object.entries(current).filter(([d, entry]) => d !== date.id && entry.hostId === b.id).length);
-        return [{ dateId: date.id, matches, hostId: hosts[0].id }];
+        const countInMatches = (id: string) => matches.filter(m => m.teamA === id || m.teamB === id).length;
+        const isFinale = allTeamsOnFinalDay && date.id === finalDateId;
+        const slotsLeft = maxMatchesPerDay - matches.length;
+        const viableHosts = hosts.filter(host => {
+          if (isFinale) return true;
+          const distantSingles = teams.filter(t => participants.has(t.id) && hasLongJourney(t.homePlace!, host.homePlace!) && countInMatches(t.id) < 2);
+          // An incomplete day can still switch to a host added by a later match.
+          return slotsLeft > 0 || distantSingles.length === 0;
+        });
+        const deficit = (host: Team) => teams.filter(t => participants.has(t.id) && hasLongJourney(t.homePlace!, host.homePlace!) && countInMatches(t.id) < 2).length;
+        viableHosts.sort((a, b) => deficit(a) - deficit(b) || Object.entries(current).filter(([d, entry]) => d !== date.id && entry.hostId === a.id).length - Object.entries(current).filter(([d, entry]) => d !== date.id && entry.hostId === b.id).length);
+        // Host choice is recomputed whenever a match is added. The least deficit
+        // host preserves feasibility; remaining host preferences only affect score.
+        return viableHosts.length ? [{ dateId: date.id, matches, hostId: viableHosts[0].id }] : [];
       });
       const backtrack = (remaining: Match[], current: Schedule) => {
         iterations++;
         if (searchLimitReached()) return;
         if (!remaining.length) {
           if (allTeamsOnFinalDay && teams.some(t => (current[finalDateId]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length !== 1)) return;
+          for (const [dateId, day] of Object.entries(current)) {
+            if (allTeamsOnFinalDay && dateId === finalDateId) continue;
+            if (day.matches.length < 2) return;
+            const host = teams.find(t => t.id === day.hostId)!;
+            for (const t of teams) {
+              const count = day.matches.filter(m => m.teamA === t.id || m.teamB === t.id).length;
+              if (count === 1 && hasLongJourney(t.homePlace!, host.homePlace!)) return;
+            }
+          }
           const score = getScore(current);
-          if (score < bestScore) {
+          const dayCount = Object.keys(current).length;
+          if (dayCount < bestDayCount || (dayCount === bestDayCount && score < bestScore)) {
+            bestDayCount = dayCount;
             bestScore = score; bestSchedule = JSON.parse(JSON.stringify(current));
             if (firstSolutionIteration === null) firstSolutionIteration = iterations;
           }
           return;
         }
+        if (Object.keys(current).length > bestDayCount) return;
+        let requiredExtraMatches = 0;
+        for (const [dateId, day] of Object.entries(current)) {
+          if (allTeamsOnFinalDay && dateId === finalDateId) continue;
+          const count = (id: string) => day.matches.filter(m => m.teamA === id || m.teamB === id).length;
+          const participants = teams.filter(t => count(t.id) > 0);
+          const canReceive = (id?: string) => remaining.some(m => {
+            if (id && m.teamA !== id && m.teamB !== id) return false;
+            if (!availability[m.teamA]?.[dateId] || !availability[m.teamB]?.[dateId]) return false;
+            if (day.matches.some(existing => existing.teamA === m.teamA && existing.teamB === m.teamB)) return false;
+            return [m.teamA, m.teamB].every(teamId => {
+              const c = count(teamId);
+              if (c >= maxMatchesPerTeamPerDay) return false;
+              const triples = Object.entries(current).filter(([d, entry]) => d !== dateId && entry.matches.filter(game => game.teamA === teamId || game.teamB === teamId).length === 3).length;
+              return c !== 2 || triples < maxTripleDaysPerTeam;
+            });
+          });
+          const slots = maxMatchesPerDay - day.matches.length;
+          let minimumExtra = Infinity;
+          // A later match may introduce a different host, so consider those too.
+          for (const host of teams.filter(t => homeAvailability[t.id]?.[dateId] && availability[t.id]?.[dateId] && t.maxCapacity >= participants.length && (count(t.id) > 0 || canReceive(t.id)))) {
+            const singles = participants.filter(t => count(t.id) === 1 && hasLongJourney(t.homePlace!, host.homePlace!));
+            if (singles.some(t => !canReceive(t.id))) continue;
+            const needed = Math.max(day.matches.length < 2 ? 1 : 0, Math.ceil(singles.length / 2), count(host.id) ? 0 : 1);
+            if (needed <= slots && (!needed || canReceive())) minimumExtra = Math.min(minimumExtra, needed);
+          }
+          if (!Number.isFinite(minimumExtra)) return;
+          requiredExtraMatches += minimumExtra;
+        }
+        if (requiredExtraMatches > remaining.length) return;
         // An uncovered finale team must still have an opponent whose final game is also unassigned.
         if (allTeamsOnFinalDay) {
           const finalParticipants = new Set((current[finalDateId]?.matches || []).flatMap(m => [m.teamA, m.teamB]));
@@ -481,8 +585,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           seen.add(key);
           const copies = remaining.filter(m => m.teamA === match.teamA && m.teamB === match.teamB).length;
           const options = placements(match, current);
-          if (options.length < copies) return;
-          const slack = options.length - copies;
+          const eligibleDates = new Set(options.map(option => option.dateId)).size;
+          if (eligibleDates < copies) return;
+          const slack = eligibleDates - copies;
           if (slack < leastSlack) { leastSlack = slack; chosenIndex = i; chosenOptions = options; }
         }
         if (chosenIndex < 0) return;
@@ -533,7 +638,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         if (dev > 0) softDevs.push(`Der gefundene Plan verteilt die Spiele nicht exakt gleichmäßig.`);
         if (maxTeamMatches >= 3) softDevs.push(`Einige Teams spielen ${maxTeamMatches} Spiele an einem einzigen Tag.`);
         if (searchStopped) softDevs.push(`Der Suchraum war zu groß. Es wird die beste innerhalb der Sicherheitslimits gefundene Lösung angezeigt.`);
-        softDevs.push(`Optimierung: Die Suche bevorzugt wenige Anreisetage pro Team.`);
+        softDevs.push(`Optimierung: Zuerst möglichst wenige Spieltage, danach bevorzugt mindestens drei Spiele je Spieltag und wenige Anreisetage pro Team. Eine globale Bestlösung wird nicht garantiert.`);
+        softDevs.push(`Reguläre Spieltage: mindestens zwei Spiele; der Gastgeber spielt mit. Teams mit mehr als 100 km Luftlinie zum Gastgeber spielen mindestens zweimal. Der gemeinsame Saisonabschluss ist von diesen Mindestzahlen ausgenommen.`);
         softDevs.push(`Optimierung: Die Suche bevorzugt eine gleichmäßige Verteilung der Heimspieltage.`);
 
         setReport({
@@ -634,6 +740,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                   </button>
                 ))}
               </div>
+              <p className="text-xs text-gray-400">Reguläre Spieltage: mindestens zwei Spiele, bevorzugt drei oder mehr. Der Planer bevorzugt möglichst wenige Spieltage.</p>
               <p className="text-[10px] opacity-50 font-mono uppercase">Jedes Team spielt {matchMode}-mal gegen jedes andere Team.</p>
             </div>
 
@@ -681,9 +788,10 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             <div className="space-y-3">
               <AnimatePresence initial={false}>
                 {teams.map((team, index) => (
-                  <motion.div key={team.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="flex items-center gap-3 group">
+                  <motion.div key={team.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="space-y-2 group">
+                    <div className="flex items-center gap-3">
                     <span className="font-mono text-[10px] opacity-40 w-6">{String.fromCharCode(65 + index)}</span>
-                    <input type="text" value={team.name} onChange={(e) => updateTeamName(team.id, e.target.value)} className="flex-1 bg-transparent border-b border-white/10 py-1 focus:border-blue-500 outline-none transition-colors" />
+                    <input aria-label={`Name Team ${index + 1}`} type="text" value={team.name} onChange={(e) => updateTeamName(team.id, e.target.value)} className="flex-1 bg-transparent border-b border-white/10 py-1 focus:border-blue-500 outline-none transition-colors" />
                     <div className="flex items-center gap-2">
                       <span className="text-[10px] opacity-40 font-mono">MAX:</span>
                       <input 
@@ -698,12 +806,20 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                     <button onClick={() => removeTeam(team.id)} className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-red-400 hover:text-red-500 transition-all p-1 outline-none">
                       <Trash2 size={14} />
                     </button>
+                    </div>
+                    <label className="block text-xs text-gray-400">Heimspielort
+                      <input aria-label={`Heimspielort ${team.name}`} type="text" placeholder="Ort, PLZ oder Hallenadresse" value={team.homeLocationQuery || ''} onChange={e => updateHomeLocation(team.id, e.target.value)} onBlur={() => resolveHomeLocation(team)} className="block mt-1 w-full bg-white/5 border border-white/10 rounded-lg p-2 text-white" />
+                    </label>
+                    {team.homePlace && <p className="text-xs text-emerald-400">✓ {team.homePlace.label}</p>}
+                    {placeMessages[team.id] && <p role="status" className="text-xs text-amber-300">{placeMessages[team.id]}</p>}
+                    {placeChoices[team.id]?.map(place => <button key={place.label} onClick={() => chooseHomePlace(team.id, place)} className="block w-full text-left text-xs bg-white/5 hover:bg-blue-500/20 rounded p-2">{place.label}</button>)}
                   </motion.div>
                 ))}
               </AnimatePresence>
             </div>
             <p className="text-[10px] opacity-50 font-mono uppercase pt-2 border-t border-white/5">
               MAX = Maximale Anzahl an Teams bei Heimspielen (Hallenkapazität).
+              <span className="block mt-2 normal-case font-sans">Ortssuche: Photon / © OpenStreetMap-Mitwirkende. Die Entfernungen werden lokal als Luftlinie berechnet. Über 100 km: mindestens zwei Spiele pro Gastteam; am gemeinsamen Saisonabschluss genau eines.</span>
             </p>
           </section>
 
@@ -790,8 +906,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
               {schedule && report && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                     {[
+                      { label: 'Spieltage', value: report.matchesPerDay.length },
                       { label: 'Paarungen', value: (teams.length * (teams.length - 1)) / 2 },
                       { label: 'Gesamtspiele', value: report.matchesPerDay.reduce((a, b) => a + b, 0) },
                       { label: 'Ø Spiele/Tag', value: (report.matchesPerDay.reduce((a, b) => a + b, 0) / report.matchesPerDay.length).toFixed(1) },
@@ -830,6 +947,15 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                             <span className="text-[10px] font-mono uppercase bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded border border-blue-500/30">
                               {schedule[dateEntry.id]?.matches.length || 0} Spiele
                             </span>
+                          </div>
+                          <div className="flex flex-wrap gap-2 mb-3">
+                            {teams.filter(t => schedule[dateEntry.id].matches.some(m => m.teamA === t.id || m.teamB === t.id)).map(t => {
+                              const day = schedule[dateEntry.id];
+                              const host = teams.find(h => h.id === day.hostId)!;
+                              const km = distanceKm(t.homePlace!, host.homePlace!);
+                              const count = day.matches.filter(m => m.teamA === t.id || m.teamB === t.id).length;
+                              return <span key={t.id} className="text-xs text-gray-300 bg-white/5 rounded px-2 py-1">{t.name}: {count} {count === 1 ? 'Spiel' : 'Spiele'} · {t.id === host.id ? 'Gastgeber' : `${Math.round(km)} km Luftlinie${km > 100 ? ' (weite Anreise)' : ''}`}</span>;
+                            })}
                           </div>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                             {schedule[dateEntry.id]?.matches.map((match, i) => (
