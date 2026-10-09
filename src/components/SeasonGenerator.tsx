@@ -148,6 +148,10 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const maxMatchesPerTeamPerDay = Math.min(3, draft.maxMatchesPerTeamPerDay);
   const allTeamsOnFinalDay = draft.allTeamsOnFinalDay ?? false;
   const maxTripleDaysPerTeam = draft.maxTripleDaysPerTeam ?? 1;
+  const finalDayCandidate = allTeamsOnFinalDay ? [...dates].reverse().find(date => teams.every(team => availability[team.id]?.[date.id])) : undefined;
+  const seasonDates = allTeamsOnFinalDay && finalDayCandidate ? dates.filter(date => date.value <= finalDayCandidate.value) : dates;
+  const ignoredLateDates = dates.length - seasonDates.length;
+
   const seasonYear = draft.seasonYear ?? (Number(dates[0]?.value.slice(0, 4)) || new Date().getFullYear());
   const [calendarTeamId, setCalendarTeamId] = useState('');
   const [holidayRegions, setHolidayRegions] = useState<Region[]>([]);
@@ -333,6 +337,10 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     setReport(null);
 
     setTimeout(() => {
+      if (allTeamsOnFinalDay && !finalDayCandidate) {
+        setError('Kein gemeinsamer Saisonabschluss möglich: Es gibt keinen ausgewählten Termin, an dem alle Teams verfügbar sind.'); setIsGenerating(false); return;
+      }
+      const dates = seasonDates;
       if (!dates.length || dates.some(d => !/^\d{4}-\d{2}-\d{2}$/.test(d.value)) || new Set(dates.map(d => d.value)).size !== dates.length) {
         setError('Bitte mindestens einen Spieltag auswählen. Termine müssen gültig und eindeutig sein.'); setIsGenerating(false); return;
       }
@@ -340,8 +348,19 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       if (allTeamsOnFinalDay && teams.length % 2 !== 0) {
         setError('Gemeinsamer Saisonabschluss mit genau einem Spiel pro Team erfordert eine gerade Anzahl an Teams.'); setIsGenerating(false); return;
       }
-      if (allTeamsOnFinalDay && (teams.some(t => !availability[t.id]?.[finalDateId]) || maxMatchesPerDay < Math.ceil(teams.length / 2) || !teams.some(t => homeAvailability[t.id]?.[finalDateId] && t.maxCapacity >= teams.length))) {
-        setError('Gemeinsamer Saisonabschluss nicht möglich: Alle Teams müssen am letzten Termin verfügbar sein, die Spielkapazität muss ausreichen und ein Gastgeber muss alle Teams aufnehmen können.'); setIsGenerating(false); return;
+      if (allTeamsOnFinalDay) {
+        const finalLabel = formatDate(dates[dates.length - 1].value);
+        const requiredMatches = teams.length / 2;
+        if (maxMatchesPerDay < requiredMatches) {
+          setError(`Saisonabschluss am ${finalLabel}: ${teams.length} Teams benötigen ${requiredMatches} Spiele. „Max. Spiele pro Tag“ ist auf ${maxMatchesPerDay} eingestellt. Erhöhe das Limit auf mindestens ${requiredMatches}.`); setIsGenerating(false); return;
+        }
+        const hosts = teams.filter(t => homeAvailability[t.id]?.[finalDateId]);
+        if (!hosts.length) {
+          setError(`Saisonabschluss am ${finalLabel}: Kein Team hat an diesem Termin „Heimspiel möglich“ (H) aktiviert.`); setIsGenerating(false); return;
+        }
+        if (!hosts.some(t => t.maxCapacity >= teams.length)) {
+          setError(`Saisonabschluss am ${finalLabel}: Ein Gastgeber muss ${teams.length} Teams aufnehmen können. Die größte eingetragene Gastgeberkapazität an diesem Termin beträgt ${Math.max(...hosts.map(t => t.maxCapacity))}.`); setIsGenerating(false); return;
+        }
       }
       const allMatches = generatePairings(teams, matchMode);
       const totalMatches = allMatches.length;
@@ -514,7 +533,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         });
 
         const softDevs: string[] = [];
-        if (allTeamsOnFinalDay) softDevs.push('Gemeinsamer Saisonabschluss: Jedes Team spielt am letzten Spieltag genau einmal.');
+        if (allTeamsOnFinalDay) softDevs.push(`Gemeinsamer Saisonabschluss am ${formatDate(dates[dates.length - 1].value)}: Jedes Team spielt genau einmal. ${ignoredLateDates} spätere ausgewählte Termine werden ignoriert.`);
         teams.forEach(t => {
           const tripleCount = dates.filter(d => (bestSchedule![d.id]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length === 3).length;
           softDevs.push(`${t.name}: ${tripleCount} von maximal ${maxTripleDaysPerTeam} Drei-Spiele-Tagen.`);
@@ -545,7 +564,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const downloadExcel = () => {
     if (!schedule) return;
 
-    const data = dates.flatMap(dateEntry => {
+    const data = seasonDates.flatMap(dateEntry => {
       const day = schedule[dateEntry.id];
       if (!day) return [];
       return day.matches.map((match, index) => ({
@@ -728,6 +747,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               {availabilityUndo && <button type="button" onClick={undoClearAvailability} className="text-xs rounded-lg px-3 py-2 bg-blue-500/20 text-blue-200 border border-blue-400/30">Rückgängig</button>}
 
             </div>
+            {allTeamsOnFinalDay && finalDayCandidate && <p className="text-xs text-blue-200">Saisonabschluss: {formatDate(finalDayCandidate.value)} · {ignoredLateDates} spätere Termine werden bei der Planung ignoriert.</p>}
             {availabilityUndo && <p role="status" className="text-xs text-blue-200">Alle Verfügbarkeiten und Heimspiel-Auswahlen wurden gelöscht. Rückgängig ist bis zur nächsten Änderung dieser Einträge möglich.</p>}
             <p className="text-xs text-gray-400">Datum = Spieltag auswählen. V = Team verfügbar (blau). H = Heimspiel möglich (grün). Verfügbarkeit oder Heimspiel wählen aktiviert den Termin. Ein Jahreswechsel startet eine neue Terminauswahl.</p>
             <div className="flex flex-wrap gap-3 items-center text-xs">
@@ -782,7 +802,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                     {[
                       { label: 'Paarungen', value: (teams.length * (teams.length - 1)) / 2 },
                       { label: 'Gesamtspiele', value: report.matchesPerDay.reduce((a, b) => a + b, 0) },
-                      { label: 'Ø Spiele/Tag', value: (report.matchesPerDay.reduce((a, b) => a + b, 0) / dates.length).toFixed(1) },
+                      { label: 'Ø Spiele/Tag', value: (report.matchesPerDay.reduce((a, b) => a + b, 0) / report.matchesPerDay.length).toFixed(1) },
                       { label: 'Max Last/Team', value: report.maxMatchesPerTeamPerDay },
                       { label: 'Bedingungen', value: 'Gültig', color: 'text-emerald-400' }
                     ].map((stat, i) => (
@@ -804,7 +824,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                       </button>
                     </div>
                     <div className="space-y-6">
-                      {dates.map((dateEntry) => (
+                      {seasonDates.map((dateEntry) => (
                         <div key={dateEntry.id} className="relative pl-8 border-l border-white/10 pb-2">
                           <div className="absolute left-[-5px] top-0 w-[9px] h-[9px] rounded-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]" />
                           <div className="flex items-center justify-between mb-3">
