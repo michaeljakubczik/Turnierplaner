@@ -320,6 +320,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         setError('Bitte mindestens einen Spieltag auswählen. Termine müssen gültig und eindeutig sein.'); setIsGenerating(false); return;
       }
       const finalDateId = dates[dates.length - 1].id;
+      if (allTeamsOnFinalDay && teams.length % 2 !== 0) {
+        setError('Gemeinsamer Saisonabschluss mit genau einem Spiel pro Team erfordert eine gerade Anzahl an Teams.'); setIsGenerating(false); return;
+      }
       if (allTeamsOnFinalDay && (teams.some(t => !availability[t.id]?.[finalDateId]) || maxMatchesPerDay < Math.ceil(teams.length / 2) || !teams.some(t => homeAvailability[t.id]?.[finalDateId] && t.maxCapacity >= teams.length))) {
         setError('Gemeinsamer Saisonabschluss nicht möglich: Alle Teams müssen am letzten Termin verfügbar sein, die Spielkapazität muss ausreichen und ein Gastgeber muss alle Teams aufnehmen können.'); setIsGenerating(false); return;
       }
@@ -399,7 +402,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         if (matchIndex === allMatches.length) {
           const allDaysHaveMatches = dates.every(d => (currentSchedule[d.id]?.matches.length || 0) >= MIN_MATCHES_PER_DAY);
           if (!allDaysHaveMatches) return;
-          if (allTeamsOnFinalDay && teams.some(t => !(currentSchedule[finalDateId]?.matches || []).some(m => m.teamA === t.id || m.teamB === t.id))) return;
+          if (allTeamsOnFinalDay && teams.some(t => (currentSchedule[finalDateId]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length !== 1)) return;
 
           const score = getScore(currentSchedule);
           if (score < bestScore) {
@@ -428,6 +431,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           const teamACount = dayMatches.filter(m => m.teamA === match.teamA || m.teamB === match.teamA).length;
           const teamBCount = dayMatches.filter(m => m.teamA === match.teamB || m.teamB === match.teamB).length;
           if (teamACount >= maxMatchesPerTeamPerDay || teamBCount >= maxMatchesPerTeamPerDay) continue;
+          if (allTeamsOnFinalDay && dateEntry.id === finalDateId && (teamACount >= 1 || teamBCount >= 1)) continue;
           const tripleDays = (id: string) => Object.entries(currentSchedule).filter(([dayId, day]) => dayId !== dateEntry.id && day.matches.filter(m => m.teamA === id || m.teamB === id).length === 3).length;
           if ((teamACount === 2 && tripleDays(match.teamA) >= maxTripleDaysPerTeam) || (teamBCount === 2 && tripleDays(match.teamB) >= maxTripleDaysPerTeam)) continue;
           
@@ -493,7 +497,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         });
 
         const softDevs: string[] = [];
-        if (allTeamsOnFinalDay) softDevs.push('Gemeinsamer Saisonabschluss: Alle Teams spielen am letzten Spieltag.');
+        if (allTeamsOnFinalDay) softDevs.push('Gemeinsamer Saisonabschluss: Jedes Team spielt am letzten Spieltag genau einmal.');
         teams.forEach(t => {
           const tripleCount = dates.filter(d => (bestSchedule![d.id]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length === 3).length;
           softDevs.push(`${t.name}: ${tripleCount} von maximal ${maxTripleDaysPerTeam} Drei-Spiele-Tagen.`);
@@ -628,7 +632,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 </div>
                 <p className="text-[10px] opacity-50 font-mono uppercase">Maximale Anzahl an Spielen pro Team an einem Tag.</p>
               </div>
-            <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag dabei<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
+            <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag: genau ein Spiel pro Team<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
             <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
               <input aria-label="Maximale Drei-Spiele-Tage" type="number" min="0" max="100" value={maxTripleDaysPerTeam} onChange={e => setDraft(prev => ({ ...prev, maxTripleDaysPerTeam: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))} className="ml-3 w-16 bg-white/10 rounded p-2" />
               <span className="block text-xs text-gray-400 mt-2">0 = höchstens zwei Spiele pro Tag. Drei Spiele sind nur bei Tageslimit 3 erlaubt.</span>
