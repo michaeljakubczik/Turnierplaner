@@ -702,24 +702,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               <label>Jahr <select aria-label="Saisonjahr" value={seasonYear} onChange={e => setDraft(prev => ({ ...prev, seasonYear: Number(e.target.value), dates: [], availability: {}, homeAvailability: {} }))} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{Array.from({ length: 12 }, (_, i) => new Date().getFullYear() - 1 + i).concat(seasonYear).filter((v, i, a) => a.indexOf(v) === i).sort().map(y => <option key={y}>{y}</option>)}</select></label>
               <label>Team <select aria-label="Kalenderteam" value={activeTeamId} onChange={e => setCalendarTeamId(e.target.value)} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
               <span className="text-xs text-gray-400">{dates.length} Spieltage ausgewählt</span>
-              <button type="button" onClick={clearAvailability} disabled={!hasAvailabilityEntries} className="text-xs rounded-lg px-3 py-2 bg-red-500/15 text-red-300 border border-red-400/30 disabled:opacity-40">Alle Einträge löschen</button>
-              {availabilityUndo && <button type="button" onClick={undoClearAvailability} className="text-xs rounded-lg px-3 py-2 bg-blue-500/20 text-blue-200 border border-blue-400/30">Rückgängig</button>}
 
             </div>
-            {availabilityUndo && <p role="status" className="text-xs text-blue-200">Alle Verfügbarkeiten und Heimspiel-Auswahlen wurden gelöscht. Rückgängig ist bis zur nächsten Änderung dieser Einträge möglich.</p>}
-            <p className="text-xs text-gray-400">Datum = Spieltag auswählen. V = Team verfügbar (blau). H = Heimspiel möglich (grün). Verfügbarkeit oder Heimspiel wählen aktiviert den Termin. Ein Jahreswechsel startet eine neue Terminauswahl.</p>
-            <div className="flex flex-wrap gap-3 items-center text-xs">
-              <span>Ferien & Feiertage einblenden:</span>
-              {(['HB', 'HH', 'NI'] as Region[]).map(region => <label key={region} className="flex items-center gap-1" style={{ color: holidayColors[region] }}><input type="checkbox" checked={holidayRegions.includes(region)} onChange={e => setHolidayRegions(prev => e.target.checked ? [...prev, region] : prev.filter(r => r !== region))} />{regionNames[region]}</label>)}
-            </div>
-            {holidayRegions.length > 0 && <div className="text-xs text-gray-300 space-y-1">
-              <p>Helle transparente Hintergründe = Ferien · stärkerer Farbton = Start-/Endwochenende · Rot = Feiertag. Randwochenenden schließen die direkt angrenzenden Wochenenden ein.</p>
-              {!hasVacationData(seasonYear) && <p className="text-amber-300" role="status">Für {seasonYear} sind keine geprüften Ferientermine hinterlegt. Ferien verfügbar: 2026–2029. Feiertage werden weiterhin angezeigt.</p>}
-              <details><summary>Termine und Quellen (auch Feiertage unter der Woche)</summary>
-                {holidayRegions.map(region => <div key={region} className="mt-2"><strong style={{ color: holidayColors[region] }}>{regionNames[region]}</strong><div className="flex flex-wrap gap-x-4 gap-y-1">{(holidayPeriods[region] || []).filter(p => p.start.slice(5) >= '03-01' && p.start.slice(5) <= '10-31').map(p => <span key={p.name}>{p.name}: {p.start.slice(8)}.{p.start.slice(5,7)}.{p.kind === 'vacation' ? ` – ${p.end.slice(8)}.${p.end.slice(5,7)}.` : ''}</span>)}</div></div>)}
-                <p className="mt-2">Ferienquellen: <a className="underline" href="https://www.bildung.bremen.de/ferientermine-3404" target="_blank" rel="noreferrer">Bremen</a> · <a className="underline" href="https://www.hamburg.de/resource/blob/134372/5bc131bdd36a604f67b361d21f7df37e/ferienordnung-hamburg-2024-2030-data.pdf" target="_blank" rel="noreferrer">Hamburg</a> · <a className="underline" href="https://www.mk.niedersachsen.de/download/98088/Ferienuebersicht_Schuljahr_2024_25_-_2029_30_fuer_Sehbehinderte_.pdf" target="_blank" rel="noreferrer">Niedersachsen</a>. Stand: 09.10.2026.</p>
-              </details>
-            </div>}
             <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
               {weekends.map(month => <div key={month.name} className="bg-black/20 rounded-xl p-2">
                 <h3 className="font-bold text-sm mb-2">{month.name}</h3>
@@ -739,6 +723,25 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 </div>
               </div>)}
             </div>
+            <div className="flex flex-wrap gap-3 items-center">
+              <button type="button" onClick={clearAvailability} disabled={!hasAvailabilityEntries} className="text-xs rounded-lg px-3 py-2 bg-red-500/15 text-red-300 border border-red-400/30 disabled:opacity-40">Alle Einträge löschen</button>
+              {availabilityUndo && <button type="button" onClick={undoClearAvailability} className="text-xs rounded-lg px-3 py-2 bg-blue-500/20 text-blue-200 border border-blue-400/30">Rückgängig</button>}
+
+            </div>
+            {availabilityUndo && <p role="status" className="text-xs text-blue-200">Alle Verfügbarkeiten und Heimspiel-Auswahlen wurden gelöscht. Rückgängig ist bis zur nächsten Änderung dieser Einträge möglich.</p>}
+            <p className="text-xs text-gray-400">Datum = Spieltag auswählen. V = Team verfügbar (blau). H = Heimspiel möglich (grün). Verfügbarkeit oder Heimspiel wählen aktiviert den Termin. Ein Jahreswechsel startet eine neue Terminauswahl.</p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <span>Ferien & Feiertage einblenden:</span>
+              {(['HB', 'HH', 'NI'] as Region[]).map(region => <label key={region} className="flex items-center gap-1" style={{ color: holidayColors[region] }}><input type="checkbox" checked={holidayRegions.includes(region)} onChange={e => setHolidayRegions(prev => e.target.checked ? [...prev, region] : prev.filter(r => r !== region))} />{regionNames[region]}</label>)}
+            </div>
+            {holidayRegions.length > 0 && <div className="text-xs text-gray-300 space-y-1">
+              <p>Helle transparente Hintergründe = Ferien · stärkerer Farbton = Start-/Endwochenende · Rot = Feiertag. Randwochenenden schließen die direkt angrenzenden Wochenenden ein.</p>
+              {!hasVacationData(seasonYear) && <p className="text-amber-300" role="status">Für {seasonYear} sind keine geprüften Ferientermine hinterlegt. Ferien verfügbar: 2026–2029. Feiertage werden weiterhin angezeigt.</p>}
+              <details><summary>Termine und Quellen (auch Feiertage unter der Woche)</summary>
+                {holidayRegions.map(region => <div key={region} className="mt-2"><strong style={{ color: holidayColors[region] }}>{regionNames[region]}</strong><div className="flex flex-wrap gap-x-4 gap-y-1">{(holidayPeriods[region] || []).filter(p => p.start.slice(5) >= '03-01' && p.start.slice(5) <= '10-31').map(p => <span key={p.name}>{p.name}: {p.start.slice(8)}.{p.start.slice(5,7)}.{p.kind === 'vacation' ? ` – ${p.end.slice(8)}.${p.end.slice(5,7)}.` : ''}</span>)}</div></div>)}
+                <p className="mt-2">Ferienquellen: <a className="underline" href="https://www.bildung.bremen.de/ferientermine-3404" target="_blank" rel="noreferrer">Bremen</a> · <a className="underline" href="https://www.hamburg.de/resource/blob/134372/5bc131bdd36a604f67b361d21f7df37e/ferienordnung-hamburg-2024-2030-data.pdf" target="_blank" rel="noreferrer">Hamburg</a> · <a className="underline" href="https://www.mk.niedersachsen.de/download/98088/Ferienuebersicht_Schuljahr_2024_25_-_2029_30_fuer_Sehbehinderte_.pdf" target="_blank" rel="noreferrer">Niedersachsen</a>. Stand: 09.10.2026.</p>
+              </details>
+            </div>}
             {dates.some(d => !weekends.some(m => m.days.some(w => w.id === d.id))) && <details><summary className="text-xs">Weitere gespeicherte Termine</summary>{dates.filter(d => !weekends.some(m => m.days.some(w => w.id === d.id))).map(d => <div key={d.id} className="flex gap-3 text-xs py-1">{d.value}<button onClick={() => toggleAvailability(activeTeamId, d.id)}>V: {availability[activeTeamId]?.[d.id] ? 'Ja' : 'Nein'}</button><button onClick={() => toggleHomeAvailability(activeTeamId, d.id)}>H: {homeAvailability[activeTeamId]?.[d.id] ? 'Ja' : 'Nein'}</button><button onClick={() => removeDate(d.id)}>Entfernen</button></div>)}</details>}
           </section>
         </fieldset>
