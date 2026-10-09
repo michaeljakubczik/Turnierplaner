@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
+import { calendarPeriods, periodMarks, hasVacationData, regionNames, type Region } from '../lib/seasonCalendar';
 import { usePersistentState } from '../hooks/usePersistentState';
 
 // --- Types ---
@@ -118,9 +119,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       '3': { 'd1': false, 'd2': false },
     },
     homeAvailability: {
-      '1': { 'd1': true, 'd2': true },
-      '2': { 'd1': true, 'd2': true },
-      '3': { 'd1': true, 'd2': true },
+      '1': { 'd1': false, 'd2': false },
+      '2': { 'd1': false, 'd2': false },
+      '3': { 'd1': false, 'd2': false },
     },
     seasonYear: new Date().getFullYear(),
     allTeamsOnFinalDay: false,
@@ -149,6 +150,10 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const maxTripleDaysPerTeam = draft.maxTripleDaysPerTeam ?? 1;
   const seasonYear = draft.seasonYear ?? (Number(dates[0]?.value.slice(0, 4)) || new Date().getFullYear());
   const [calendarTeamId, setCalendarTeamId] = useState('');
+  const [holidayRegions, setHolidayRegions] = useState<Region[]>([]);
+  const holidayPeriods = useMemo(() => Object.fromEntries(holidayRegions.map(region => [region, calendarPeriods(seasonYear, region)])) as Partial<Record<Region, ReturnType<typeof calendarPeriods>>>, [seasonYear, holidayRegions]);
+  const holidayColors: Record<Region, string> = { HB: '#fb923c', HH: '#c084fc', NI: '#facc15' };
+
   const activeTeamId = teams.some(t => t.id === calendarTeamId) ? calendarTeamId : teams[0]?.id;
   const weekends = useMemo(() => Array.from({ length: 8 }, (_, i) => {
     const month = i + 2;
@@ -192,7 +197,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       },
       homeAvailability: {
         ...prev.homeAvailability,
-        [newId]: prev.dates.reduce((acc, date) => ({ ...acc, [date.id]: true }), {})
+        [newId]: prev.dates.reduce((acc, date) => ({ ...acc, [date.id]: false }), {})
       }
     }));
   };
@@ -237,7 +242,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         if (!newAvail[t.id]) newAvail[t.id] = {};
         newAvail[t.id][newId] = false;
         if (!newHomeAvail[t.id]) newHomeAvail[t.id] = {};
-        newHomeAvail[t.id][newId] = true;
+        newHomeAvail[t.id][newId] = false;
       });
       return { ...prev, dates: newDates, availability: newAvail, homeAvailability: newHomeAvail };
     });
@@ -678,11 +683,24 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               <span className="text-xs text-gray-400">{dates.length} Spieltage ausgewählt</span>
             </div>
             <p className="text-xs text-gray-400">Datum = Spieltag auswählen. V = Team verfügbar (blau). H = Heimspiel möglich (grün). Verfügbarkeit oder Heimspiel wählen aktiviert den Termin. Ein Jahreswechsel startet eine neue Terminauswahl.</p>
+            <div className="flex flex-wrap gap-3 items-center text-xs">
+              <span>Ferien & Feiertage einblenden:</span>
+              {(['HB', 'HH', 'NI'] as Region[]).map(region => <label key={region} className="flex items-center gap-1" style={{ color: holidayColors[region] }}><input type="checkbox" checked={holidayRegions.includes(region)} onChange={e => setHolidayRegions(prev => e.target.checked ? [...prev, region] : prev.filter(r => r !== region))} />{regionNames[region]}</label>)}
+            </div>
+            {holidayRegions.length > 0 && <div className="text-xs text-gray-300 space-y-1">
+              <p>Transparente Streifen = Ferien · kräftige Streifen mit S/E = Start-/Endwochenende · F = Feiertag. Randwochenenden schließen die direkt angrenzenden Wochenenden ein.</p>
+              {!hasVacationData(seasonYear) && <p className="text-amber-300" role="status">Für {seasonYear} sind keine geprüften Ferientermine hinterlegt. Ferien verfügbar: 2026–2029. Feiertage werden weiterhin angezeigt.</p>}
+              <details><summary>Termine und Quellen (auch Feiertage unter der Woche)</summary>
+                {holidayRegions.map(region => <div key={region} className="mt-2"><strong style={{ color: holidayColors[region] }}>{regionNames[region]}</strong><div className="flex flex-wrap gap-x-4 gap-y-1">{(holidayPeriods[region] || []).filter(p => p.start.slice(5) >= '03-01' && p.start.slice(5) <= '10-31').map(p => <span key={p.name}>{p.name}: {p.start.slice(8)}.{p.start.slice(5,7)}.{p.kind === 'vacation' ? ` – ${p.end.slice(8)}.${p.end.slice(5,7)}.` : ''}</span>)}</div></div>)}
+                <p className="mt-2">Ferienquellen: <a className="underline" href="https://www.bildung.bremen.de/ferientermine-3404" target="_blank" rel="noreferrer">Bremen</a> · <a className="underline" href="https://www.hamburg.de/resource/blob/134372/5bc131bdd36a604f67b361d21f7df37e/ferienordnung-hamburg-2024-2030-data.pdf" target="_blank" rel="noreferrer">Hamburg</a> · <a className="underline" href="https://www.mk.niedersachsen.de/download/98088/Ferienuebersicht_Schuljahr_2024_25_-_2029_30_fuer_Sehbehinderte_.pdf" target="_blank" rel="noreferrer">Niedersachsen</a>. Stand: 09.10.2026.</p>
+              </details>
+            </div>}
             <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
               {weekends.map(month => <div key={month.name} className="bg-black/20 rounded-xl p-2">
                 <h3 className="font-bold text-sm mb-2">{month.name}</h3>
                 <div className="grid grid-cols-2 gap-1">
                   {month.days.map(date => { const selected = dates.some(d => d.id === date.id); return <div key={date.id} className={`rounded p-1 border ${selected ? 'border-blue-400/60' : 'border-white/10 opacity-70'}`}>
+                    {holidayRegions.map(region => { const marks = periodMarks(date.value, holidayPeriods[region] || []); return marks.length > 0 ? <div key={region} title={marks.map(m => `${regionNames[region]}: ${m.name}${m.boundary ? ' · ' + m.boundary : ''}`).join(' / ')} aria-label={marks.map(m => `${regionNames[region]} ${m.name} ${m.boundary}`).join(', ')} className="rounded mb-1 text-[8px] leading-3 text-center font-bold" style={{ backgroundColor: holidayColors[region] + (marks.some(m => m.boundary) ? '90' : '35') }}>{region} {marks.some(m => m.boundary === 'Feiertag') ? 'F' : marks.some(m => m.boundary === 'Startwochenende') ? 'S' : marks.some(m => m.boundary === 'Endwochenende') ? 'E' : '·'}</div> : null; })}
                     <button aria-label={`Spieltag ${date.value}`} aria-pressed={selected} onClick={() => selectCalendarDay(date, 'date')} className="text-[10px] w-full font-bold">{new Date(date.value).getUTCDay() === 6 ? 'Sa' : 'So'} {date.value.slice(8)}</button>
                     <div className="flex gap-1 mt-1"><button aria-label={`${getTeamName(activeTeamId)} verfügbar ${date.value}`} aria-pressed={selected && !!availability[activeTeamId]?.[date.id]} onClick={() => selectCalendarDay(date, 'available')} className={`flex-1 text-[10px] rounded ${selected && availability[activeTeamId]?.[date.id] ? 'bg-blue-600' : 'bg-white/10'}`}>V</button><button aria-label={`${getTeamName(activeTeamId)} Heimspiel ${date.value}`} aria-pressed={selected && !!homeAvailability[activeTeamId]?.[date.id]} onClick={() => selectCalendarDay(date, 'home')} className={`flex-1 text-[10px] rounded ${selected && homeAvailability[activeTeamId]?.[date.id] ? 'bg-emerald-600' : 'bg-white/10'}`}>H</button></div>
                   </div>; })}
