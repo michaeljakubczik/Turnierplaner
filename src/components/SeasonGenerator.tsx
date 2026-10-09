@@ -74,7 +74,6 @@ type ValidationReport = {
   softConstraintDeviations: string[];
 };
 
-const MIN_MATCHES_PER_DAY = 1;
 
 const formatDate = (dateStr: string) => {
   try {
@@ -371,21 +370,15 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         return;
       }
 
-      if (totalMatches < dates.length * MIN_MATCHES_PER_DAY) {
-        setError(`Unmöglich: Die Gesamtanzahl der Spiele (${totalMatches}) ist geringer als das erforderliche Minimum von ${dates.length * MIN_MATCHES_PER_DAY} (${dates.length} Tage * ${MIN_MATCHES_PER_DAY} Spiel/Tag). Entferne einige Daten oder erhöhe den Spielmodus.`);
-        setIsGenerating(false);
-        return;
-      }
-
       let bestSchedule: Schedule | null = null;
       let bestScore = Infinity;
       let iterations = 0;
       const MAX_ITERATIONS = 200000;
 
       const getScore = (currentSchedule: Schedule) => {
-        const counts = dates.map(d => currentSchedule[d.id]?.matches.length || 0);
-        const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
-        const variance = counts.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / counts.length;
+        const counts = dates.map(d => currentSchedule[d.id]?.matches.length || 0).filter(count => count > 0);
+        const avg = counts.reduce((a, b) => a + b, 0) / Math.max(1, counts.length);
+        const variance = counts.reduce((a, b) => a + Math.pow(b - avg, 2), 0) / Math.max(1, counts.length);
         
         let penalty = variance * 100;
 
@@ -461,7 +454,6 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         iterations++;
         if (searchLimitReached()) return;
         if (!remaining.length) {
-          if (dates.some(d => !current[d.id]?.matches.length)) return;
           if (allTeamsOnFinalDay && teams.some(t => (current[finalDateId]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length !== 1)) return;
           const score = getScore(current);
           if (score < bestScore) {
@@ -470,7 +462,6 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           }
           return;
         }
-        if (dates.filter(d => !current[d.id]?.matches.length).length > remaining.length) return;
         // An uncovered finale team must still have an opponent whose final game is also unassigned.
         if (allTeamsOnFinalDay) {
           const finalParticipants = new Set((current[finalDateId]?.matches || []).flatMap(m => [m.teamA, m.teamB]));
@@ -497,10 +488,10 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         if (chosenIndex < 0) return;
         const nextRemaining = remaining.filter((_, index) => index !== chosenIndex);
         chosenOptions.sort((a, b) => {
-          // Cover the finale early, then prefer the less loaded days.
+          // Cover the finale early, then consolidate games on already used days.
           const finalA = allTeamsOnFinalDay && a.dateId === finalDateId ? -1 : 0;
           const finalB = allTeamsOnFinalDay && b.dateId === finalDateId ? -1 : 0;
-          return finalA - finalB || a.matches.length - b.matches.length;
+          return finalA - finalB || b.matches.length - a.matches.length;
         });
         for (const option of chosenOptions) {
           if (searchLimitReached()) return;
@@ -511,8 +502,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
       if (bestSchedule) {
         setSchedule(bestSchedule);
-        const counts = dates.map(d => bestSchedule![d.id]?.matches.length || 0);
-        const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+        const counts = dates.map(d => bestSchedule![d.id]?.matches.length || 0).filter(count => count > 0);
+        const avg = counts.reduce((a, b) => a + b, 0) / Math.max(1, counts.length);
         const dev = counts.reduce((a, b) => a + Math.abs(b - avg), 0);
         
         let maxTeamMatches = 0;
@@ -721,7 +712,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               <h2 className="font-bold text-xl">Team-Verfügbarkeit</h2>
               <label>Jahr <select aria-label="Saisonjahr" value={seasonYear} onChange={e => setDraft(prev => ({ ...prev, seasonYear: Number(e.target.value), dates: [], availability: {}, homeAvailability: {} }))} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{Array.from({ length: 12 }, (_, i) => new Date().getFullYear() - 1 + i).concat(seasonYear).filter((v, i, a) => a.indexOf(v) === i).sort().map(y => <option key={y}>{y}</option>)}</select></label>
               <label>Team <select aria-label="Kalenderteam" value={activeTeamId} onChange={e => setCalendarTeamId(e.target.value)} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
-              <span className="text-xs text-gray-400">{dates.length} Spieltage ausgewählt</span>
+              <span className="text-xs text-gray-400">{dates.length} mögliche Termine ausgewählt</span>
 
             </div>
             <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
@@ -750,7 +741,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             </div>
             {allTeamsOnFinalDay && finalDayCandidate && <p className="text-xs text-blue-200">Saisonabschluss: {formatDate(finalDayCandidate.value)} · {ignoredLateDates} spätere Termine werden bei der Planung ignoriert.</p>}
             {availabilityUndo && <p role="status" className="text-xs text-blue-200">Alle Verfügbarkeiten und Heimspiel-Auswahlen wurden gelöscht. Rückgängig ist bis zur nächsten Änderung dieser Einträge möglich.</p>}
-            <p className="text-xs text-gray-400">Datum = Spieltag auswählen. V = Team verfügbar (blau). H = Heimspiel möglich (grün). Verfügbarkeit oder Heimspiel wählen aktiviert den Termin. Ein Jahreswechsel startet eine neue Terminauswahl.</p>
+            <p className="text-xs text-gray-400">Datum = möglichen Spieltermin auswählen. Nicht jeder ausgewählte Termin muss genutzt werden. V = Team verfügbar (blau). H = Heimspiel möglich (grün). Verfügbarkeit oder Heimspiel wählen aktiviert den Termin. Ein Jahreswechsel startet eine neue Terminauswahl.</p>
             <div className="flex flex-wrap gap-3 items-center text-xs">
               <span>Ferien & Feiertage einblenden:</span>
               {(['HB', 'HH', 'NI'] as Region[]).map(region => <label key={region} className="flex items-center gap-1" style={{ color: holidayColors[region] }}><input type="checkbox" checked={holidayRegions.includes(region)} onChange={e => setHolidayRegions(prev => e.target.checked ? [...prev, region] : prev.filter(r => r !== region))} />{regionNames[region]}</label>)}
@@ -825,7 +816,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                       </button>
                     </div>
                     <div className="space-y-6">
-                      {seasonDates.map((dateEntry) => (
+                      {seasonDates.filter(dateEntry => schedule[dateEntry.id]?.matches.length).map((dateEntry) => (
                         <div key={dateEntry.id} className="relative pl-8 border-l border-white/10 pb-2">
                           <div className="absolute left-[-5px] top-0 w-[9px] h-[9px] rounded-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]" />
                           <div className="flex items-center justify-between mb-3">
