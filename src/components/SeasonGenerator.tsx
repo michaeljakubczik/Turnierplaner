@@ -380,7 +380,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       let bestSchedule: Schedule | null = null;
       let bestScore = Infinity;
       let iterations = 0;
-      const MAX_ITERATIONS = 100000;
+      const MAX_ITERATIONS = 200000;
 
       const getScore = (currentSchedule: Schedule) => {
         const counts = dates.map(d => currentSchedule[d.id]?.matches.length || 0);
@@ -431,82 +431,83 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         return penalty;
       };
 
-      const backtrack = (matchIndex: number, currentSchedule: Schedule) => {
+      const startedAt = performance.now();
+      let searchStopped = false;
+      let firstSolutionIteration: number | null = null;
+      const searchLimitReached = () => {
+        const stop = iterations > MAX_ITERATIONS || performance.now() - startedAt > 6000;
+        if (stop) searchStopped = true;
+        return stop || (firstSolutionIteration !== null && iterations - firstSolutionIteration > 3000);
+      };
+      const placements = (match: Match, current: Schedule) => dates.flatMap(date => {
+        const day = current[date.id] || { matches: [], hostId: '' };
+        if (day.matches.length >= maxMatchesPerDay || !availability[match.teamA]?.[date.id] || !availability[match.teamB]?.[date.id]) return [];
+        if (day.matches.some(m => m.teamA === match.teamA && m.teamB === match.teamB)) return [];
+        const count = (id: string) => day.matches.filter(m => m.teamA === id || m.teamB === id).length;
+        for (const id of [match.teamA, match.teamB]) {
+          const c = count(id);
+          if (c >= maxMatchesPerTeamPerDay || (allTeamsOnFinalDay && date.id === finalDateId && c >= 1)) return [];
+          const tripleDays = Object.entries(current).filter(([d, entry]) => d !== date.id && entry.matches.filter(m => m.teamA === id || m.teamB === id).length === 3).length;
+          if (c === 2 && tripleDays >= maxTripleDaysPerTeam) return [];
+        }
+        const matches = [...day.matches, match];
+        const participants = new Set(matches.flatMap(m => [m.teamA, m.teamB]));
+        const hosts = teams.filter(t => participants.has(t.id) && homeAvailability[t.id]?.[date.id] && t.maxCapacity >= participants.size);
+        if (!hosts.length) return [];
+        hosts.sort((a, b) => Object.entries(current).filter(([d, entry]) => d !== date.id && entry.hostId === a.id).length - Object.entries(current).filter(([d, entry]) => d !== date.id && entry.hostId === b.id).length);
+        return [{ dateId: date.id, matches, hostId: hosts[0].id }];
+      });
+      const backtrack = (remaining: Match[], current: Schedule) => {
         iterations++;
-        if (iterations > MAX_ITERATIONS) return;
-
-        if (matchIndex === allMatches.length) {
-          const allDaysHaveMatches = dates.every(d => (currentSchedule[d.id]?.matches.length || 0) >= MIN_MATCHES_PER_DAY);
-          if (!allDaysHaveMatches) return;
-          if (allTeamsOnFinalDay && teams.some(t => (currentSchedule[finalDateId]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length !== 1)) return;
-
-          const score = getScore(currentSchedule);
+        if (searchLimitReached()) return;
+        if (!remaining.length) {
+          if (dates.some(d => !current[d.id]?.matches.length)) return;
+          if (allTeamsOnFinalDay && teams.some(t => (current[finalDateId]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length !== 1)) return;
+          const score = getScore(current);
           if (score < bestScore) {
-            bestScore = score;
-            bestSchedule = JSON.parse(JSON.stringify(currentSchedule));
+            bestScore = score; bestSchedule = JSON.parse(JSON.stringify(current));
+            if (firstSolutionIteration === null) firstSolutionIteration = iterations;
           }
           return;
         }
-
-        const match = allMatches[matchIndex];
-        const sortedDates = [...dates].sort((a, b) => 
-          (currentSchedule[a.id]?.matches.length || 0) - (currentSchedule[b.id]?.matches.length || 0)
-        );
-
-        for (const dateEntry of sortedDates) {
-          if (bestScore === 0) return;
-          if (iterations > MAX_ITERATIONS) return;
-
-          const day = currentSchedule[dateEntry.id] || { matches: [], hostId: '' };
-          const dayMatches = day.matches;
-          
-          if (dayMatches.length >= maxMatchesPerDay) continue;
-          if (!availability[match.teamA]?.[dateEntry.id] || !availability[match.teamB]?.[dateEntry.id]) continue;
-
-          // Check max matches per team per day constraint
-          const teamACount = dayMatches.filter(m => m.teamA === match.teamA || m.teamB === match.teamA).length;
-          const teamBCount = dayMatches.filter(m => m.teamA === match.teamB || m.teamB === match.teamB).length;
-          if (teamACount >= maxMatchesPerTeamPerDay || teamBCount >= maxMatchesPerTeamPerDay) continue;
-          if (allTeamsOnFinalDay && dateEntry.id === finalDateId && (teamACount >= 1 || teamBCount >= 1)) continue;
-          const tripleDays = (id: string) => Object.entries(currentSchedule).filter(([dayId, day]) => dayId !== dateEntry.id && day.matches.filter(m => m.teamA === id || m.teamB === id).length === 3).length;
-          if ((teamACount === 2 && tripleDays(match.teamA) >= maxTripleDaysPerTeam) || (teamBCount === 2 && tripleDays(match.teamB) >= maxTripleDaysPerTeam)) continue;
-          
-          const alreadyPaired = dayMatches.some(m => 
-            (m.teamA === match.teamA && m.teamB === match.teamB) ||
-            (m.teamA === match.teamB && m.teamB === match.teamA)
-          );
-          if (alreadyPaired) continue;
-
-          // Check if any valid host exists for this day with the new match
-          const nextMatches = [...dayMatches, match];
-          const uniqueTeams = new Set<string>();
-          nextMatches.forEach(m => { uniqueTeams.add(m.teamA); uniqueTeams.add(m.teamB); });
-          
-          const possibleHosts = Array.from(uniqueTeams).filter(tId => {
-            const team = teams.find(t => t.id === tId);
-            return team && homeAvailability[tId]?.[dateEntry.id] && uniqueTeams.size <= team.maxCapacity;
-          });
-
-          if (possibleHosts.length === 0) continue;
-
-          // Pick a host (for now just the first one, getScore will penalize imbalance)
-          // To be more efficient, we could try all hosts, but that would explode the search space.
-          // Instead, we pick the best host for this day based on current home game counts.
-          const homeGameCounts: Record<string, number> = {};
-          Object.values(currentSchedule).forEach(d => { if (d.hostId) homeGameCounts[d.hostId] = (homeGameCounts[d.hostId] || 0) + 1; });
-          
-          possibleHosts.sort((a, b) => (homeGameCounts[a] || 0) - (homeGameCounts[b] || 0));
-          const bestHostId = possibleHosts[0];
-
-          const nextSchedule = { 
-            ...currentSchedule, 
-            [dateEntry.id]: { matches: nextMatches, hostId: bestHostId } 
-          };
-          backtrack(matchIndex + 1, nextSchedule);
+        if (dates.filter(d => !current[d.id]?.matches.length).length > remaining.length) return;
+        // An uncovered finale team must still have an opponent whose final game is also unassigned.
+        if (allTeamsOnFinalDay) {
+          const finalParticipants = new Set((current[finalDateId]?.matches || []).flatMap(m => [m.teamA, m.teamB]));
+          for (const t of teams) {
+            if (!finalParticipants.has(t.id) && !remaining.some(m => (m.teamA === t.id || m.teamB === t.id) && !finalParticipants.has(m.teamA) && !finalParticipants.has(m.teamB))) return;
+          }
+        }
+        // Schedule the pairing with the fewest remaining eligible days first.
+        let chosenIndex = -1;
+        let chosenOptions: ReturnType<typeof placements> = [];
+        let leastSlack = Infinity;
+        const seen = new Set<string>();
+        for (let i = 0; i < remaining.length; i++) {
+          const match = remaining[i];
+          const key = `${match.teamA}/${match.teamB}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const copies = remaining.filter(m => m.teamA === match.teamA && m.teamB === match.teamB).length;
+          const options = placements(match, current);
+          if (options.length < copies) return;
+          const slack = options.length - copies;
+          if (slack < leastSlack) { leastSlack = slack; chosenIndex = i; chosenOptions = options; }
+        }
+        if (chosenIndex < 0) return;
+        const nextRemaining = remaining.filter((_, index) => index !== chosenIndex);
+        chosenOptions.sort((a, b) => {
+          // Cover the finale early, then prefer the less loaded days.
+          const finalA = allTeamsOnFinalDay && a.dateId === finalDateId ? -1 : 0;
+          const finalB = allTeamsOnFinalDay && b.dateId === finalDateId ? -1 : 0;
+          return finalA - finalB || a.matches.length - b.matches.length;
+        });
+        for (const option of chosenOptions) {
+          if (searchLimitReached()) return;
+          backtrack(nextRemaining, { ...current, [option.dateId]: { matches: option.matches, hostId: option.hostId } });
         }
       };
-
-      backtrack(0, {});
+      backtrack(allMatches, {});
 
       if (bestSchedule) {
         setSchedule(bestSchedule);
@@ -540,7 +541,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         });
         if (dev > 0) softDevs.push(`Der gefundene Plan verteilt die Spiele nicht exakt gleichmäßig.`);
         if (maxTeamMatches >= 3) softDevs.push(`Einige Teams spielen ${maxTeamMatches} Spiele an einem einzigen Tag.`);
-        if (iterations > MAX_ITERATIONS) softDevs.push(`Der Suchraum war zu groß. Es wird die beste innerhalb der Sicherheitslimits gefundene Lösung angezeigt.`);
+        if (searchStopped) softDevs.push(`Der Suchraum war zu groß. Es wird die beste innerhalb der Sicherheitslimits gefundene Lösung angezeigt.`);
         softDevs.push(`Optimierung: Die Suche bevorzugt wenige Anreisetage pro Team.`);
         softDevs.push(`Optimierung: Die Suche bevorzugt eine gleichmäßige Verteilung der Heimspieltage.`);
 
@@ -553,7 +554,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           softConstraintDeviations: softDevs
         });
       } else {
-        setError(iterations > MAX_ITERATIONS ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Das beweist nicht, dass die Planung unmöglich ist." : "Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss und die erlaubten Drei-Spiele-Tage.");
+        setError(searchStopped ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Das beweist nicht, dass die Planung unmöglich ist." : "Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss und die erlaubten Drei-Spiele-Tage.");
       }
       setIsGenerating(false);
     }, 800);
