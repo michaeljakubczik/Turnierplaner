@@ -52,6 +52,9 @@ type ScheduleDay = {
 type Schedule = Record<string, ScheduleDay>; // dateId -> day info
 
 type SeasonDraft = {
+  seasonYear?: number;
+  allTeamsOnFinalDay?: boolean;
+  maxTripleDaysPerTeam?: number;
   teams: Team[];
   dates: DateEntry[];
   availability: Availability;
@@ -119,6 +122,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       '2': { 'd1': true, 'd2': true },
       '3': { 'd1': true, 'd2': true },
     },
+    seasonYear: new Date().getFullYear(),
+    allTeamsOnFinalDay: false,
+    maxTripleDaysPerTeam: 1,
     matchMode: 2,
     maxMatchesPerDay: 3,
     maxMatchesPerTeamPerDay: 2
@@ -136,12 +142,42 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     setError(null);
   };
 
-  const { teams, dates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay } = draft;
+  const { teams, availability, homeAvailability, matchMode, maxMatchesPerDay } = draft;
+  const dates = useMemo(() => [...draft.dates].sort((a, b) => a.value.localeCompare(b.value)), [draft.dates]);
+  const maxMatchesPerTeamPerDay = Math.min(3, draft.maxMatchesPerTeamPerDay);
+  const allTeamsOnFinalDay = draft.allTeamsOnFinalDay ?? false;
+  const maxTripleDaysPerTeam = draft.maxTripleDaysPerTeam ?? 1;
+  const seasonYear = draft.seasonYear ?? (Number(dates[0]?.value.slice(0, 4)) || new Date().getFullYear());
+  const [calendarTeamId, setCalendarTeamId] = useState('');
+  const activeTeamId = teams.some(t => t.id === calendarTeamId) ? calendarTeamId : teams[0]?.id;
+  const weekends = useMemo(() => Array.from({ length: 8 }, (_, i) => {
+    const month = i + 2;
+    const days: DateEntry[] = [];
+    for (let day = 1; day <= new Date(seasonYear, month + 1, 0).getDate(); day++) {
+      const date = new Date(seasonYear, month, day);
+      if (date.getDay() === 0 || date.getDay() === 6) {
+        const value = `${seasonYear}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        days.push({ id: draft.dates.find(d => d.value === value)?.id ?? value, value });
+      }
+    }
+    return { name: new Date(seasonYear, month, 1).toLocaleDateString('de-DE', { month: 'long' }), days };
+  }), [seasonYear, draft.dates]);
+  const selectCalendarDay = (date: DateEntry, kind: 'date' | 'available' | 'home') => {
+    setDraft(prev => {
+      const exists = prev.dates.some(d => d.id === date.id);
+      if (kind === 'date') return { ...prev, dates: exists ? prev.dates.filter(d => d.id !== date.id) : [...prev.dates, date] };
+      const key = kind === 'home' ? 'homeAvailability' : 'availability';
+      return { ...prev, dates: exists ? prev.dates : [...prev.dates, date],
+        [key]: { ...prev[key], [activeTeamId]: { ...prev[key][activeTeamId], [date.id]: !prev[key][activeTeamId]?.[date.id] } } };
+    });
+  };
 
   const [isGenerating, setIsGenerating] = useState(false);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<ValidationReport | null>(null);
+
+  useEffect(() => { setSchedule(null); setReport(null); setError(null); }, [draft]);
 
   const addTeam = () => {
     const newId = Math.random().toString(36).substr(2, 9);
@@ -273,6 +309,13 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     setReport(null);
 
     setTimeout(() => {
+      if (!dates.length || dates.some(d => !/^\d{4}-\d{2}-\d{2}$/.test(d.value)) || new Set(dates.map(d => d.value)).size !== dates.length) {
+        setError('Bitte mindestens einen Spieltag auswählen. Termine müssen gültig und eindeutig sein.'); setIsGenerating(false); return;
+      }
+      const finalDateId = dates[dates.length - 1].id;
+      if (allTeamsOnFinalDay && (teams.some(t => !availability[t.id]?.[finalDateId]) || maxMatchesPerDay < Math.ceil(teams.length / 2) || !teams.some(t => homeAvailability[t.id]?.[finalDateId] && t.maxCapacity >= teams.length))) {
+        setError('Gemeinsamer Saisonabschluss nicht möglich: Alle Teams müssen am letzten Termin verfügbar sein, die Spielkapazität muss ausreichen und ein Gastgeber muss alle Teams aufnehmen können.'); setIsGenerating(false); return;
+      }
       const allMatches = generatePairings(teams, matchMode);
       const totalMatches = allMatches.length;
 
@@ -349,6 +392,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         if (matchIndex === allMatches.length) {
           const allDaysHaveMatches = dates.every(d => (currentSchedule[d.id]?.matches.length || 0) >= MIN_MATCHES_PER_DAY);
           if (!allDaysHaveMatches) return;
+          if (allTeamsOnFinalDay && teams.some(t => !(currentSchedule[finalDateId]?.matches || []).some(m => m.teamA === t.id || m.teamB === t.id))) return;
 
           const score = getScore(currentSchedule);
           if (score < bestScore) {
@@ -377,6 +421,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           const teamACount = dayMatches.filter(m => m.teamA === match.teamA || m.teamB === match.teamA).length;
           const teamBCount = dayMatches.filter(m => m.teamA === match.teamB || m.teamB === match.teamB).length;
           if (teamACount >= maxMatchesPerTeamPerDay || teamBCount >= maxMatchesPerTeamPerDay) continue;
+          const tripleDays = (id: string) => Object.entries(currentSchedule).filter(([dayId, day]) => dayId !== dateEntry.id && day.matches.filter(m => m.teamA === id || m.teamB === id).length === 3).length;
+          if ((teamACount === 2 && tripleDays(match.teamA) >= maxTripleDaysPerTeam) || (teamBCount === 2 && tripleDays(match.teamB) >= maxTripleDaysPerTeam)) continue;
           
           const alreadyPaired = dayMatches.some(m => 
             (m.teamA === match.teamA && m.teamB === match.teamB) ||
@@ -440,11 +486,16 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         });
 
         const softDevs: string[] = [];
-        if (dev > 0) softDevs.push(`Perfekte Verteilung aufgrund von Verfügbarkeitseinschränkungen nicht möglich.`);
+        if (allTeamsOnFinalDay) softDevs.push('Gemeinsamer Saisonabschluss: Alle Teams spielen am letzten Spieltag.');
+        teams.forEach(t => {
+          const tripleCount = dates.filter(d => (bestSchedule![d.id]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length === 3).length;
+          softDevs.push(`${t.name}: ${tripleCount} von maximal ${maxTripleDaysPerTeam} Drei-Spiele-Tagen.`);
+        });
+        if (dev > 0) softDevs.push(`Der gefundene Plan verteilt die Spiele nicht exakt gleichmäßig.`);
         if (maxTeamMatches >= 3) softDevs.push(`Einige Teams spielen ${maxTeamMatches} Spiele an einem einzigen Tag.`);
         if (iterations > MAX_ITERATIONS) softDevs.push(`Der Suchraum war zu groß. Es wird die beste innerhalb der Sicherheitslimits gefundene Lösung angezeigt.`);
-        softDevs.push(`Optimierung: Die Anzahl der Teams pro Spieltag wurde minimiert.`);
-        softDevs.push(`Optimierung: Heimspiele wurden gleichmäßig verteilt.`);
+        softDevs.push(`Optimierung: Die Suche bevorzugt wenige Anreisetage pro Team.`);
+        softDevs.push(`Optimierung: Die Suche bevorzugt eine gleichmäßige Verteilung der Heimspieltage.`);
 
         setReport({
           matchesPerDay: counts,
@@ -455,7 +506,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           softConstraintDeviations: softDevs
         });
       } else {
-        setError("Kein gültiger Spielplan gefunden, der alle harten Bedingungen erfüllt. Versuche, mehr Daten hinzuzufügen oder die Team-Verfügbarkeit anzupassen.");
+        setError(iterations > MAX_ITERATIONS ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Das beweist nicht, dass die Planung unmöglich ist." : "Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss und die erlaubten Drei-Spiele-Tage.");
       }
       setIsGenerating(false);
     }, 800);
@@ -529,7 +580,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       </header>
 
       <main className="p-4 sm:p-6 lg:p-10 max-w-7xl mx-auto space-y-10">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+        <fieldset disabled={isGenerating} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Spielmodus */}
           <section className="space-y-6 glass-card p-6 rounded-3xl h-full">
             <div className="space-y-4">
@@ -565,11 +616,16 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                   <h2 className="font-bold text-xl">Max. Spiele pro Team/Tag</h2>
                 </div>
                 <div className="flex items-center gap-4">
-                  <input type="range" min="1" max="5" value={maxMatchesPerTeamPerDay} onChange={(e) => setMaxMatchesPerTeamPerDay(parseInt(e.target.value))} className="flex-1 accent-blue-500 cursor-pointer" />
+                  <input type="range" min="1" max="3" value={maxMatchesPerTeamPerDay} onChange={(e) => setMaxMatchesPerTeamPerDay(parseInt(e.target.value))} className="flex-1 accent-blue-500 cursor-pointer" />
                   <span className="font-mono font-bold text-lg w-8 text-center text-blue-400">{maxMatchesPerTeamPerDay}</span>
                 </div>
                 <p className="text-[10px] opacity-50 font-mono uppercase">Maximale Anzahl an Spielen pro Team an einem Tag.</p>
               </div>
+            <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag dabei<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
+            <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
+              <input aria-label="Maximale Drei-Spiele-Tage" type="number" min="0" max="100" value={maxTripleDaysPerTeam} onChange={e => setDraft(prev => ({ ...prev, maxTripleDaysPerTeam: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))} className="ml-3 w-16 bg-white/10 rounded p-2" />
+              <span className="block text-xs text-gray-400 mt-2">0 = höchstens zwei Spiele pro Tag. Drei Spiele sind nur bei Tageslimit 3 erlaubt.</span>
+            </label>
           </section>
 
           {/* Teams */}
@@ -612,97 +668,28 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             </p>
           </section>
 
-          {/* Spieltage */}
-          <section className="space-y-4 glass-card p-6 rounded-3xl h-full">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
-              <div className="flex items-center gap-2">
-                <CalendarIcon size={20} className="text-blue-400" />
-                <h2 className="font-bold text-xl">Spieltage</h2>
-              </div>
-              <button onClick={addDate} className="text-xs font-bold uppercase tracking-widest hover:text-blue-400 flex items-center gap-1 transition-colors">
-                <Plus size={14} /> Datum hinzufügen
-              </button>
+          <section className="lg:col-span-2 glass-card p-4 rounded-3xl space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <h2 className="font-bold text-xl">Team-Verfügbarkeit</h2>
+              <label>Jahr <select aria-label="Saisonjahr" value={seasonYear} onChange={e => setDraft(prev => ({ ...prev, seasonYear: Number(e.target.value), dates: [], availability: {}, homeAvailability: {} }))} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{Array.from({ length: 12 }, (_, i) => new Date().getFullYear() - 1 + i).concat(seasonYear).filter((v, i, a) => a.indexOf(v) === i).sort().map(y => <option key={y}>{y}</option>)}</select></label>
+              <label>Team <select aria-label="Kalenderteam" value={activeTeamId} onChange={e => setCalendarTeamId(e.target.value)} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+              <span className="text-xs text-gray-400">{dates.length} Spieltage ausgewählt</span>
             </div>
-            <div className="space-y-2">
-              <AnimatePresence initial={false}>
-                {dates.map((dateEntry, index) => (
-                  <motion.div key={dateEntry.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} className="flex items-center gap-3 group">
-                    <span className="font-mono text-[10px] opacity-40 w-6">D{index + 1}</span>
-                    <input type="date" value={dateEntry.value} onChange={(e) => {
-                      const newDates = [...dates];
-                      newDates[index] = { ...dateEntry, value: e.target.value };
-                      setDraft(prev => ({ ...prev, dates: newDates }));
-                    }} className="flex-1 bg-transparent border-b border-white/10 py-1 focus:border-blue-500 outline-none transition-colors font-mono text-sm text-white [color-scheme:dark]" />
-                    <button onClick={() => removeDate(dateEntry.id)} className="opacity-0 group-hover:opacity-100 focus:opacity-100 text-red-400 hover:text-red-500 transition-all p-1 outline-none">
-                      <Trash2 size={14} />
-                    </button>
-                  </motion.div>
-                ))}
-              </AnimatePresence>
-            </div>
-          </section>
-
-          {/* Team-Verfügbarkeit */}
-          <section className="space-y-4 glass-card p-6 rounded-3xl h-full">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
-              <div className="flex items-center gap-2">
-                <CheckCircle2 size={20} className="text-blue-400" />
-                <h2 className="font-bold text-xl">Team-Verfügbarkeit</h2>
-              </div>
-              <div className="flex items-center gap-4 text-[10px] font-mono opacity-50">
-                <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 rounded bg-blue-600"></div>
-                  <span>Verfügbar</span>
+            <p className="text-xs text-gray-400">Datum = Spieltag auswählen. V = Team verfügbar (blau). H = Heimspiel möglich (grün). Verfügbarkeit oder Heimspiel wählen aktiviert den Termin. Ein Jahreswechsel startet eine neue Terminauswahl.</p>
+            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2">
+              {weekends.map(month => <div key={month.name} className="bg-black/20 rounded-xl p-2">
+                <h3 className="font-bold text-sm mb-2">{month.name}</h3>
+                <div className="grid grid-cols-2 gap-1">
+                  {month.days.map(date => { const selected = dates.some(d => d.id === date.id); return <div key={date.id} className={`rounded p-1 border ${selected ? 'border-blue-400/60' : 'border-white/10 opacity-70'}`}>
+                    <button aria-label={`Spieltag ${date.value}`} aria-pressed={selected} onClick={() => selectCalendarDay(date, 'date')} className="text-[10px] w-full font-bold">{new Date(date.value).getUTCDay() === 6 ? 'Sa' : 'So'} {date.value.slice(8)}</button>
+                    <div className="flex gap-1 mt-1"><button aria-label={`${getTeamName(activeTeamId)} verfügbar ${date.value}`} aria-pressed={selected && !!availability[activeTeamId]?.[date.id]} onClick={() => selectCalendarDay(date, 'available')} className={`flex-1 text-[10px] rounded ${selected && availability[activeTeamId]?.[date.id] ? 'bg-blue-600' : 'bg-white/10'}`}>V</button><button aria-label={`${getTeamName(activeTeamId)} Heimspiel ${date.value}`} aria-pressed={selected && !!homeAvailability[activeTeamId]?.[date.id]} onClick={() => selectCalendarDay(date, 'home')} className={`flex-1 text-[10px] rounded ${selected && homeAvailability[activeTeamId]?.[date.id] ? 'bg-emerald-600' : 'bg-white/10'}`}>H</button></div>
+                  </div>; })}
                 </div>
-                <div className="flex items-center gap-1">
-                  <div className="w-3 h-3 rounded border border-emerald-500 text-emerald-500 flex items-center justify-center text-[8px] font-bold">HS</div>
-                  <span>Heimspiel möglich</span>
-                </div>
-              </div>
+              </div>)}
             </div>
-            <div className="overflow-x-auto custom-scrollbar">
-              <table className="w-full border-collapse">
-                <thead>
-                  <tr>
-                    <th className="p-3 text-left font-bold text-xs opacity-50 border-b border-white/10 sticky left-0 bg-[#1C1F2A] z-20">Team</th>
-                    {dates.map((dateEntry) => (
-                      <th key={dateEntry.id} className="p-3 text-center font-mono text-[9px] opacity-50 border-b border-white/10 whitespace-nowrap">
-                        {new Date(dateEntry.value).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit' })}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {teams.map((team) => (
-                    <tr key={team.id} className="hover:bg-white/5 transition-colors">
-                      <td className="p-3 text-sm font-medium border-b border-white/5 sticky left-0 bg-[#1C1F2A] z-10 whitespace-nowrap">{team.name}</td>
-                      {dates.map((dateEntry) => (
-                        <td key={dateEntry.id} className="p-3 text-center border-b border-white/5">
-                          <div className="flex flex-col items-center justify-center gap-2">
-                            <button 
-                              onClick={() => toggleAvailability(team.id, dateEntry.id)} 
-                              title="Verfügbarkeit"
-                              className={`w-6 h-6 rounded-md border transition-all flex items-center justify-center ${availability[team.id]?.[dateEntry.id] ? 'bg-blue-600 border-blue-600 text-white' : 'border-white/20 bg-transparent text-transparent hover:border-white/40'}`}
-                            >
-                              <CheckCircle2 size={14} />
-                            </button>
-                            <button 
-                              onClick={() => toggleHomeAvailability(team.id, dateEntry.id)} 
-                              title="Heimspiel möglich"
-                              className={`w-6 h-6 rounded-md border transition-all flex items-center justify-center text-[9px] font-bold ${homeAvailability[team.id]?.[dateEntry.id] ? 'bg-emerald-600/20 border-emerald-500 text-emerald-400' : 'border-white/10 bg-transparent text-transparent hover:border-white/20'}`}
-                            >
-                              HS
-                            </button>
-                          </div>
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            {dates.some(d => !weekends.some(m => m.days.some(w => w.id === d.id))) && <details><summary className="text-xs">Weitere gespeicherte Termine</summary>{dates.filter(d => !weekends.some(m => m.days.some(w => w.id === d.id))).map(d => <div key={d.id} className="flex gap-3 text-xs py-1">{d.value}<button onClick={() => toggleAvailability(activeTeamId, d.id)}>V: {availability[activeTeamId]?.[d.id] ? 'Ja' : 'Nein'}</button><button onClick={() => toggleHomeAvailability(activeTeamId, d.id)}>H: {homeAvailability[activeTeamId]?.[d.id] ? 'Ja' : 'Nein'}</button><button onClick={() => removeDate(d.id)}>Entfernen</button></div>)}</details>}
           </section>
-        </div>
+        </fieldset>
 
         {/* Create Button - Moved to bottom */}
         <div className="max-w-md mx-auto pt-6">
