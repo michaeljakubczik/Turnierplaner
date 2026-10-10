@@ -50,6 +50,6 @@ export function analyzeSeason(input: SeasonInput): PlanningTip[] {
   }
   if (teamMax < 2) add('Weite Anreisen benötigen zwei Spiele', 'Bei mehr als 100 km Luftlinie brauchen Gäste regulär mindestens zwei Spiele. Mit einem Spiel pro Team sind solche Anreisen ausgeschlossen. Das Team-Tageslimit prüfen.');
   // Put verifiable bottlenecks before suggestions; keep the complete list accessible.
-  add('Suche fortsetzen und Eingaben prüfen', '„Gründlich suchen“ verwenden. Bei einem Suchlimit ist Unmöglichkeit nicht bewiesen. Bleibt die Suche erfolglos, Eingaben exportieren; damit lassen sich schwierige Kombinationen gezielt untersuchen.');
+  add('Suche fortsetzen und Eingaben prüfen', 'Nachgewiesene Engstellen zuerst beheben. Bei einem Suchlimit ohne solche Engstellen „Gründlich suchen“ verwenden: Das Suchlimit beweist keine Unmöglichkeit. Bleibt die Suche erfolglos, Eingaben exportieren, um schwierige Kombinationen gezielt zu untersuchen.');
   return tips.sort((a, b) => Number(b.proven) - Number(a.proven));
 }
