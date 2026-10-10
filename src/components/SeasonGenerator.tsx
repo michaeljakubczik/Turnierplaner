@@ -1,3 +1,5 @@
+import { matchOrdinals } from '../lib/orderDayMatches';
+import type { PlanningTip } from '../lib/planningDiagnostics';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Plus, 
@@ -189,12 +191,13 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [tips, setTips] = useState<PlanningTip[]>([]);
   const [report, setReport] = useState<ValidationReport | null>(null);
   const [alternatives, setAlternatives] = useState<PlanAlternative[]>([]);
   const [selectedPlan, setSelectedPlan] = useState(0);
   const selectPlan = (index: number) => { setSelectedPlan(index); setSchedule(alternatives[index].schedule); setReport(alternatives[index].report); };
 
-  useEffect(() => { setSchedule(null); setReport(null); setError(null); setAlternatives([]); setSelectedPlan(0); }, [draft]);
+  useEffect(() => { setSchedule(null); setReport(null); setError(null); setAlternatives([]); setSelectedPlan(0); setTips([]); }, [draft]);
 
   const addTeam = () => {
     const newId = Math.random().toString(36).substr(2, 9);
@@ -328,11 +331,12 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const cancelSearch = () => {
     workerRef.current?.terminate(); workerRef.current = null;
     setIsGenerating(false);
+    setTips([]);
     setError('Suche abgebrochen. Deine Eingaben bleiben gespeichert.');
   };
   const solve = (thorough = false) => {
     workerRef.current?.terminate();
-    setIsGenerating(true); setError(null); setSchedule(null); setReport(null); setAlternatives([]); setSelectedPlan(0);
+    setIsGenerating(true); setError(null); setSchedule(null); setReport(null); setAlternatives([]); setSelectedPlan(0); setTips([]);
     setSearchProgress({ iterations: 0, attempts: 0, elapsedMs: 0, bestDays: null });
     const durationMs = thorough ? 120000 : 30000;
     setSearchDuration(durationMs);
@@ -344,7 +348,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         if (workerRef.current !== worker) return;
         if (event.data.type === 'progress') { setSearchProgress(event.data.progress); return; }
         setAlternatives(event.data.result.alternatives); setSelectedPlan(0);
-        setSchedule(event.data.result.schedule); setReport(event.data.result.report); setError(event.data.result.error);
+        setSchedule(event.data.result.schedule); setReport(event.data.result.report); setError(event.data.result.error); setTips(event.data.result.tips || []);
         setIsGenerating(false); worker.terminate(); workerRef.current = null;
       };
       worker.onerror = () => {
@@ -379,7 +383,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         'Austragungsort (Heim)': getTeamName(day.hostId),
         'Spiel #': index + 1,
         'Team A': getTeamName(match.teamA),
-        'Team B': getTeamName(match.teamB)
+        'Team B': getTeamName(match.teamB),
+        'Tages-Spielnummer Team A': matchOrdinals(day.matches)[index].a,
+        'Tages-Spielnummer Team B': matchOrdinals(day.matches)[index].b
       }));
     });
 
@@ -617,7 +623,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               {error && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -20 }} className="bg-red-500/10 border border-red-500/20 text-red-400 p-4 rounded-xl flex items-start gap-3">
                   <AlertCircle className="shrink-0 mt-0.5" size={18} />
-                  <p className="text-sm font-medium">{error}</p>
+                  <div className="min-w-0 space-y-3"><p className="text-sm font-medium">{error}</p>
+                    {tips.length > 0 && <div className="space-y-3 text-gray-200"><h3 className="font-bold">Tipps zur Planung ({tips.length})</h3><p className="text-xs text-gray-400">Engstellen sind rechnerisch belegt. Prüfansätze können helfen, garantieren aber keinen gültigen Plan.</p><ul className="space-y-3">{tips.map((tip, i) => <li key={i} className="rounded-lg bg-white/5 p-3"><p className="text-sm font-semibold">{tip.title} <span className="text-xs text-gray-400">· {tip.proven ? 'Engstelle' : 'Prüfansatz'}</span></p><p className="text-xs mt-1 leading-relaxed">{tip.detail}</p></li>)}</ul></div>}
+                  </div>
                 </motion.div>
               )}
 
@@ -684,7 +692,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                             })}
                           </div>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                            {schedule[dateEntry.id]?.matches.map((match, i) => (
+                            {schedule[dateEntry.id]?.matches.map((match, i) => {
+                              const ordinal = matchOrdinals(schedule[dateEntry.id].matches)[i];
+                              return (
                               <div key={i} className="glass-card p-3 rounded-lg flex flex-col items-center justify-center text-center group hover:border-blue-500/50 transition-all">
                                 <span className="text-[9px] font-mono opacity-30 mb-1">SPIEL {i + 1}</span>
                                 <div className="flex items-center gap-2 w-full">
@@ -692,8 +702,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                                   <span className="text-[10px] italic opacity-40">vs</span>
                                   <span className="flex-1 text-xs font-bold truncate">{getTeamName(match.teamB)}</span>
                                 </div>
+                                <span className={`mt-2 text-[10px] ${ordinal.a === ordinal.b ? 'text-emerald-400' : 'text-amber-400'}`}>{ordinal.a}. Spiel ↔ {ordinal.b}. Spiel</span>
                               </div>
-                            ))}
+                            ); })}
                           </div>
                         </div>
                       ))}

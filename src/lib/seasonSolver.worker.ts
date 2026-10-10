@@ -5,6 +5,6 @@ self.onmessage = (event: MessageEvent<{ input: SeasonInput; options: SearchOptio
     const result = solveSeason(event.data.input, event.data.options, progress => self.postMessage({ type: 'progress', progress }));
     self.postMessage({ type: 'result', result });
   } catch {
-    self.postMessage({ type: 'result', result: { alternatives: [], schedule: null, report: null, searchStopped: false, error: 'Bei der Planung ist ein Fehler aufgetreten. Exportiere bitte deine Eingaben zur Prüfung.' } });
+    self.postMessage({ type: 'result', result: { tips: [], alternatives: [], schedule: null, report: null, searchStopped: false, error: 'Bei der Planung ist ein Fehler aufgetreten. Exportiere bitte deine Eingaben zur Prüfung.' } });
   }
 };

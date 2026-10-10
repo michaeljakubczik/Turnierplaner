@@ -1,3 +1,5 @@
+import { analyzeSeason, type PlanningTip } from './planningDiagnostics';
+import { orderDayMatches, matchOrdinals } from './orderDayMatches';
 import { balanceHosts } from './balanceHosts';
 import { hasLongJourney, type HomePlace } from './teamTravel';
 export type Team = {
@@ -48,7 +50,7 @@ export type SeasonInput = {
 };
 export type SearchProgress = { iterations: number; attempts: number; elapsedMs: number; bestDays: number | null; alternativesFound?: number };
 export type PlanAlternative = { schedule: Schedule; report: ValidationReport };
-export type SolverResult = { alternatives: PlanAlternative[]; error: string | null; schedule: Schedule | null; report: ValidationReport | null; searchStopped: boolean };
+export type SolverResult = { tips: PlanningTip[]; alternatives: PlanAlternative[]; error: string | null; schedule: Schedule | null; report: ValidationReport | null; searchStopped: boolean };
 export type SearchOptions = { durationMs: number; seed?: number };
 const formatDate = (dateStr: string) => {
   try {
@@ -75,7 +77,7 @@ const generatePairings = (teams: Team[], mode: MatchMode): Match[] => {
 
 export function solveSeason(input: SeasonInput, options: SearchOptions, onProgress: (progress: SearchProgress) => void = () => {}): SolverResult {
   const { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates } = input;
-  const result: SolverResult = { alternatives: [], error: null, schedule: null, report: null, searchStopped: false };
+  const result: SolverResult = { tips: [], alternatives: [], error: null, schedule: null, report: null, searchStopped: false };
   const setError = (error: string) => { result.error = error; };
   const setSchedule = (schedule: Schedule) => { result.schedule = schedule; };
   const setReport = (report: ValidationReport) => { result.report = report; };
@@ -397,6 +399,8 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         });
 
         const softDevs: string[] = [];
+        const mismatches = Object.values(plan).reduce((sum, day) => sum + matchOrdinals(day.matches).filter(x => x.a !== x.b).length, 0);
+        softDevs.push(`Spielreihenfolge: ${mismatches} Begegnungen mit unterschiedlicher Tages-Spielnummer. Für die jeweiligen Paarungen ist die Anzahl solcher Abweichungen minimal; danach wird deren Größe minimiert.`);
         const homeCounts = teams.map(t => homeGameDistribution[t.id] || 0);
         if (Math.max(...homeCounts) - Math.min(...homeCounts) > 1) softDevs.push(`Heimspieltage sind noch ungleich verteilt (${Math.min(...homeCounts)} bis ${Math.max(...homeCounts)}). Prüfe auch die Heimspielverteilung der anderen gefundenen Pläne und die eingetragenen Heimspielmöglichkeiten.`);
         if (allTeamsOnFinalDay) softDevs.push(`Gemeinsamer Saisonabschluss am ${formatDate(dates[dates.length - 1].value)}: Jedes Team spielt genau einmal. ${ignoredLateDates} spätere ausgewählte Termine werden ignoriert.`);
@@ -421,7 +425,10 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         };
       };
       if (bestSchedule) {
-        result.alternatives = candidates.map(candidate => ({ schedule: candidate.schedule, report: makeReport(candidate.schedule) }));
+        result.alternatives = candidates.map(candidate => {
+          const schedule = Object.fromEntries(Object.entries(candidate.schedule).map(([id, day]) => [id, { ...day, matches: orderDayMatches(day.matches) }]));
+          return { schedule, report: makeReport(schedule) };
+        });
         setSchedule(result.alternatives[0].schedule);
         setReport(result.alternatives[0].report);
       } else {
@@ -430,5 +437,6 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
 
   }
   search();
+  if (result.error) result.tips = analyzeSeason(input);
   return result;
 }

@@ -121,3 +121,37 @@ test('unavoidable zero-versus-four home distribution gives an actionable conflic
   assert.equal(result.schedule, null);
   assert.match(result.error!, /Keine zulässige Heimspielverteilung/);
 });
+
+test('game ordering aligns first, second and third appearances when possible', async () => {
+  const { orderDayMatches, matchOrdinals } = await import('./orderDayMatches');
+  const matches = [{teamA:'a',teamB:'b'},{teamA:'a',teamB:'c'},{teamA:'c',teamB:'d'},{teamA:'b',teamB:'d'},{teamA:'a',teamB:'d'},{teamA:'b',teamB:'c'}];
+  const original = structuredClone(matches);
+  const ordered = orderDayMatches(matches);
+  assert.equal(matchOrdinals(ordered).filter(x => x.a !== x.b).length, 0);
+  assert.deepEqual(matches, original);
+  assert.deepEqual([...ordered].sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))), [...matches].sort((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b))));
+  const triangle = matches.slice(0,2).concat({teamA:'b',teamB:'c'});
+  assert.equal(matchOrdinals(orderDayMatches(triangle)).filter(x => x.a !== x.b).length, 1);
+});
+
+test('ordering matches a brute force optimum for uneven appearance counts', async () => {
+  const { orderDayMatches, matchOrdinals } = await import('./orderDayMatches');
+  const matches = [{teamA:'a',teamB:'b'},{teamA:'a',teamB:'c'},{teamA:'a',teamB:'d'},{teamA:'b',teamB:'c'},{teamA:'b',teamB:'e'}];
+  const score = (ms: typeof matches) => matchOrdinals(ms).reduce((n,x)=>n+(x.a===x.b?0:100+(x.a-x.b)**2),0);
+  const permutations = (ms: typeof matches): typeof matches[] => ms.length ? ms.flatMap((m,i)=>permutations(ms.filter((_,j)=>i!==j)).map(rest=>[m,...rest])) : [[]];
+  assert.equal(score(orderDayMatches(matches)), Math.min(...permutations(matches).map(score)));
+});
+
+test('diagnostics identify missing shared dates and respect triple-day limits', async () => {
+  const { analyzeSeason } = await import('./planningDiagnostics');
+  const input = fixture(4, 2, 2);
+  input.availability.t0.d1 = false;
+  input.maxTripleDaysPerTeam = 0;
+  const tips = analyzeSeason(input);
+  assert.ok(tips.some(t => t.title.includes('Team 0 / Team 1') && t.proven && t.detail.includes('1 gemeinsame Termine für 2')));
+  assert.ok(tips.some(t => t.title.startsWith('Team 0: zu wenig') && t.detail.includes('höchstens 2')));
+  const result = solveSeason(input, {durationMs:50});
+  assert.ok(result.error); assert.ok(result.tips.length);
+  const spacious = analyzeSeason(fixture(4, 12));
+  assert.equal(spacious.filter(t=>t.proven).length, 0);
+});
