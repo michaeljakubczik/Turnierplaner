@@ -1,3 +1,4 @@
+import { balanceHosts } from './balanceHosts';
 import { hasLongJourney, type HomePlace } from './teamTravel';
 export type Team = {
   id: string;
@@ -45,8 +46,9 @@ export type SeasonInput = {
   maxTripleDaysPerTeam: number; allTeamsOnFinalDay: boolean;
   finalDayCandidate?: DateEntry; ignoredLateDates: number;
 };
-export type SearchProgress = { iterations: number; attempts: number; elapsedMs: number; bestDays: number | null };
-export type SolverResult = { error: string | null; schedule: Schedule | null; report: ValidationReport | null; searchStopped: boolean };
+export type SearchProgress = { iterations: number; attempts: number; elapsedMs: number; bestDays: number | null; alternativesFound?: number };
+export type PlanAlternative = { schedule: Schedule; report: ValidationReport };
+export type SolverResult = { alternatives: PlanAlternative[]; error: string | null; schedule: Schedule | null; report: ValidationReport | null; searchStopped: boolean };
 export type SearchOptions = { durationMs: number; seed?: number };
 const formatDate = (dateStr: string) => {
   try {
@@ -73,7 +75,7 @@ const generatePairings = (teams: Team[], mode: MatchMode): Match[] => {
 
 export function solveSeason(input: SeasonInput, options: SearchOptions, onProgress: (progress: SearchProgress) => void = () => {}): SolverResult {
   const { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates } = input;
-  const result: SolverResult = { error: null, schedule: null, report: null, searchStopped: false };
+  const result: SolverResult = { alternatives: [], error: null, schedule: null, report: null, searchStopped: false };
   const setError = (error: string) => { result.error = error; };
   const setSchedule = (schedule: Schedule) => { result.schedule = schedule; };
   const setReport = (report: ValidationReport) => { result.report = report; };
@@ -119,11 +121,22 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         return;
       }
 
+      const hostableTeams = teams.filter(t => dates.some(d => availability[t.id]?.[d.id] && homeAvailability[t.id]?.[d.id] && t.maxCapacity >= 2));
+      const minimumDays = allTeamsOnFinalDay ? 1 + Math.ceil((totalMatches - teams.length / 2) / maxMatchesPerDay) : Math.ceil(totalMatches / maxMatchesPerDay);
+      if (hostableTeams.length < teams.length && minimumDays > hostableTeams.length * 3) {
+        const withoutHomeDays = teams.filter(t => !hostableTeams.some(host => host.id === t.id));
+        setError(`Keine zulässige Heimspielverteilung: ${withoutHomeDays.map(t => t.name).join(', ')} können mit den eingetragenen Heimspielmöglichkeiten keinen Spieltag ausrichten. Für mindestens ${minimumDays} Spieltage würden andere Teams vier oder mehr Heimspieltage benötigen. Aktiviere weitere Heimspielmöglichkeiten oder erhöhe passende Gastgeberkapazitäten.`);
+        return;
+      }
+
       const distantByHost = new Map(teams.map(host => [host.id, new Set(teams.filter(t => hasLongJourney(t.homePlace!, host.homePlace!)).map(t => t.id))]));
       const isDistant = (teamId: string, hostId: string) => distantByHost.get(hostId)!.has(teamId);
 
       let bestSchedule: Schedule | null = null;
-      let bestScore = Infinity;
+      const candidates: { schedule: Schedule; score: number; spread: number; days: number; signature: string }[] = [];
+      const seenPlans = new Set<string>();
+      const seenMatchPlans = new Set<string>();
+      const MAX_ALTERNATIVES = 12;
       let bestDayCount = Infinity;
       let iterations = 0;
       const MAX_ITERATIONS = 10000000;
@@ -198,7 +211,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
       const searchLimitReached = () => {
         const now = performance.now();
         if (now - lastProgressAt > 200) {
-          onProgress({ iterations, attempts, elapsedMs: now - startedAt, bestDays: Number.isFinite(bestDayCount) ? bestDayCount : null });
+          onProgress({ iterations, attempts, elapsedMs: now - startedAt, bestDays: Number.isFinite(bestDayCount) ? bestDayCount : null, alternativesFound: candidates.length });
           lastProgressAt = now;
         }
         if (iterations > MAX_ITERATIONS || now - startedAt > durationMs) { searchStopped = true; return true; }
@@ -258,16 +271,28 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
               if (count === 1 && isDistant(t.id, host.id)) return;
             }
           }
-          const score = getScore(current);
-          const dayCount = Object.keys(current).length;
-          if (dayCount < bestDayCount || (dayCount === bestDayCount && score < bestScore)) {
-            bestDayCount = dayCount;
-            bestScore = score; bestSchedule = JSON.parse(JSON.stringify(current));
-            if (firstSolutionAt === null) firstSolutionAt = performance.now();
+          const matchSignature = Object.entries(current).sort(([a], [b]) => a.localeCompare(b)).map(([id, day]) => `${id}:${day.matches.map(m => [m.teamA, m.teamB].sort().join('/')).sort().join(',')}`).join('|');
+          if (seenMatchPlans.has(matchSignature)) return;
+          seenMatchPlans.add(matchSignature);
+          let balanced = balanceHosts(current, input);
+          if (!balanced) return;
+          let homeCounts = teams.map(t => Object.values(balanced).filter(day => day.hostId === t.id).length);
+          // Retry with a strict cap before rejecting a zero-versus-four assignment.
+          if (Math.min(...homeCounts) === 0 && Math.max(...homeCounts) >= 4) {
+            balanced = balanceHosts(current, input, 3);
+            if (!balanced) return;
+            homeCounts = teams.map(t => Object.values(balanced).filter(day => day.hostId === t.id).length);
           }
+          const signature = Object.entries(balanced).sort(([a], [b]) => a.localeCompare(b)).map(([id, day]) => `${id}:${day.hostId}:${day.matches.map(m => [m.teamA, m.teamB].sort().join('/')).sort().join(',')}`).join('|');
+          if (seenPlans.has(signature)) return;
+          seenPlans.add(signature);
+          candidates.push({ schedule: JSON.parse(JSON.stringify(balanced)), score: getScore(balanced), spread: Math.max(...homeCounts) - Math.min(...homeCounts), days: Object.keys(balanced).length, signature });
+          candidates.sort((a, b) => a.spread - b.spread || a.days - b.days || a.score - b.score || a.signature.localeCompare(b.signature));
+          if (candidates.length > MAX_ALTERNATIVES) candidates.pop();
+          bestSchedule = candidates[0].schedule; bestDayCount = candidates[0].days;
+          if (firstSolutionAt === null) firstSolutionAt = performance.now();
           return;
         }
-        if (Object.keys(current).length > bestDayCount) return;
         let requiredExtraMatches = 0;
         for (const [dateId, day] of Object.entries(current)) {
           if (allTeamsOnFinalDay && dateId === finalDateId) continue;
@@ -346,18 +371,17 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
       } while (!searchStopped && performance.now() - startedAt < durationMs && (firstSolutionAt === null || performance.now() - firstSolutionAt < 1500));
       searchStopped = searchStopped || performance.now() - startedAt >= durationMs;
       result.searchStopped = searchStopped;
-      onProgress({ iterations, attempts, elapsedMs: performance.now() - startedAt, bestDays: Number.isFinite(bestDayCount) ? bestDayCount : null });
+      onProgress({ iterations, attempts, elapsedMs: performance.now() - startedAt, bestDays: Number.isFinite(bestDayCount) ? bestDayCount : null, alternativesFound: candidates.length });
 
-      if (bestSchedule) {
-        setSchedule(bestSchedule);
-        const counts = dates.map(d => bestSchedule![d.id]?.matches.length || 0).filter(count => count > 0);
+      const makeReport = (plan: Schedule): ValidationReport => {
+        const counts = dates.map(d => plan[d.id]?.matches.length || 0).filter(count => count > 0);
         const avg = counts.reduce((a, b) => a + b, 0) / Math.max(1, counts.length);
         const dev = counts.reduce((a, b) => a + Math.abs(b - avg), 0);
         
         let maxTeamMatches = 0;
         const homeGameDistribution: Record<string, number> = {};
         dates.forEach(d => {
-          const day = bestSchedule![d.id];
+          const day = plan[d.id];
           if (!day) return;
           const teamCounts: Record<string, number> = {};
           day.matches.forEach(m => {
@@ -373,28 +397,35 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         });
 
         const softDevs: string[] = [];
+        const homeCounts = teams.map(t => homeGameDistribution[t.id] || 0);
+        if (Math.max(...homeCounts) - Math.min(...homeCounts) > 1) softDevs.push(`Heimspieltage sind noch ungleich verteilt (${Math.min(...homeCounts)} bis ${Math.max(...homeCounts)}). Prüfe auch die Heimspielverteilung der anderen gefundenen Pläne und die eingetragenen Heimspielmöglichkeiten.`);
         if (allTeamsOnFinalDay) softDevs.push(`Gemeinsamer Saisonabschluss am ${formatDate(dates[dates.length - 1].value)}: Jedes Team spielt genau einmal. ${ignoredLateDates} spätere ausgewählte Termine werden ignoriert.`);
         teams.forEach(t => {
-          const tripleCount = dates.filter(d => (bestSchedule![d.id]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length === 3).length;
+          const tripleCount = dates.filter(d => (plan[d.id]?.matches || []).filter(m => m.teamA === t.id || m.teamB === t.id).length === 3).length;
           softDevs.push(`${t.name}: ${tripleCount} von maximal ${maxTripleDaysPerTeam} Drei-Spiele-Tagen.`);
         });
         if (dev > 0) softDevs.push(`Der gefundene Plan verteilt die Spiele nicht exakt gleichmäßig.`);
         if (maxTeamMatches >= 3) softDevs.push(`Einige Teams spielen ${maxTeamMatches} Spiele an einem einzigen Tag.`);
         if (searchStopped) softDevs.push(`Der Suchraum war zu groß. Es wird die beste innerhalb der Sicherheitslimits gefundene Lösung angezeigt.`);
-        softDevs.push(`Optimierung: Zuerst möglichst wenige Spieltage, danach bevorzugt mindestens drei Spiele je Spieltag und wenige Anreisetage pro Team. Eine globale Bestlösung wird nicht garantiert.`);
+        softDevs.push(`Optimierung: Zuerst gleichmäßig verteilte Heimspieltage, danach möglichst wenige Spieltage und wenige Anreisetage pro Team. Eine globale Bestlösung wird nicht garantiert.`);
         softDevs.push(`Reguläre Spieltage: mindestens zwei Spiele; der Gastgeber spielt mit. Teams mit mehr als 100 km Luftlinie zum Gastgeber spielen mindestens zweimal. Der gemeinsame Saisonabschluss ist von diesen Mindestzahlen ausgenommen.`);
         softDevs.push(`Optimierung: Die Suche bevorzugt eine gleichmäßige Verteilung der Heimspieltage.`);
 
-        setReport({
+        return {
           matchesPerDay: counts,
           deviation: Number(dev.toFixed(2)),
           maxMatchesPerTeamPerDay: maxTeamMatches,
           homeGameDistribution,
           hardConstraintsSatisfied: true,
           softConstraintDeviations: softDevs
-        });
+        };
+      };
+      if (bestSchedule) {
+        result.alternatives = candidates.map(candidate => ({ schedule: candidate.schedule, report: makeReport(candidate.schedule) }));
+        setSchedule(result.alternatives[0].schedule);
+        setReport(result.alternatives[0].report);
       } else {
-        setError(searchStopped ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Versuche „Gründlich suchen“ oder exportiere die Eingaben zur Prüfung. Das beweist nicht, dass die Planung unmöglich ist." : "Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss und die erlaubten Drei-Spiele-Tage.");
+        setError(searchStopped ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Versuche „Gründlich suchen“ oder exportiere die Eingaben zur Prüfung. Das beweist nicht, dass die Planung unmöglich ist." : "Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss, Drei-Spiele-Tage und die Verteilung der Heimspielmöglichkeiten. Eine Verteilung mit null Heimspieltagen bei einem Team und vier oder mehr bei einem anderen wird ausgeschlossen.");
       }
 
   }

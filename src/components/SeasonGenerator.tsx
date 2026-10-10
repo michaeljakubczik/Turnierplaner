@@ -23,7 +23,7 @@ import { calendarPeriods, periodMarks, hasVacationData, regionNames, type Region
 import { distanceKm, findHomePlaces, type HomePlace } from '../lib/teamTravel';
 import { usePersistentState } from '../hooks/usePersistentState';
 
-import type { Team, MatchMode, DateEntry, Availability, HomeAvailability, Schedule, ValidationReport, SearchProgress, SeasonInput, SolverResult } from '../lib/seasonSolver';
+import type { Team, MatchMode, DateEntry, Availability, HomeAvailability, Schedule, ValidationReport, SearchProgress, SeasonInput, SolverResult, PlanAlternative } from '../lib/seasonSolver';
 
 // --- Types ---
 
@@ -190,8 +190,11 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<ValidationReport | null>(null);
+  const [alternatives, setAlternatives] = useState<PlanAlternative[]>([]);
+  const [selectedPlan, setSelectedPlan] = useState(0);
+  const selectPlan = (index: number) => { setSelectedPlan(index); setSchedule(alternatives[index].schedule); setReport(alternatives[index].report); };
 
-  useEffect(() => { setSchedule(null); setReport(null); setError(null); }, [draft]);
+  useEffect(() => { setSchedule(null); setReport(null); setError(null); setAlternatives([]); setSelectedPlan(0); }, [draft]);
 
   const addTeam = () => {
     const newId = Math.random().toString(36).substr(2, 9);
@@ -329,7 +332,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   };
   const solve = (thorough = false) => {
     workerRef.current?.terminate();
-    setIsGenerating(true); setError(null); setSchedule(null); setReport(null);
+    setIsGenerating(true); setError(null); setSchedule(null); setReport(null); setAlternatives([]); setSelectedPlan(0);
     setSearchProgress({ iterations: 0, attempts: 0, elapsedMs: 0, bestDays: null });
     const durationMs = thorough ? 120000 : 30000;
     setSearchDuration(durationMs);
@@ -340,6 +343,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       worker.onmessage = (event: MessageEvent<{ type: 'progress'; progress: SearchProgress } | { type: 'result'; result: SolverResult }>) => {
         if (workerRef.current !== worker) return;
         if (event.data.type === 'progress') { setSearchProgress(event.data.progress); return; }
+        setAlternatives(event.data.result.alternatives); setSelectedPlan(0);
         setSchedule(event.data.result.schedule); setReport(event.data.result.report); setError(event.data.result.error);
         setIsGenerating(false); worker.terminate(); workerRef.current = null;
       };
@@ -445,7 +449,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-gray-400">Reguläre Spieltage: mindestens zwei Spiele, bevorzugt drei oder mehr. Der Planer bevorzugt möglichst wenige Spieltage.</p>
+              <p className="text-xs text-gray-400">Die Planung bevorzugt eine gleichmäßige Verteilung der Heimspieltage. Null Heimspieltage bei einem Team und vier oder mehr bei einem anderen werden ausgeschlossen.</p>
+            <p className="text-xs text-gray-400">Reguläre Spieltage: mindestens zwei Spiele, bevorzugt drei oder mehr. Der Planer bevorzugt möglichst wenige Spieltage.</p>
               <p className="text-[10px] opacity-50 font-mono uppercase">Jedes Team spielt {matchMode}-mal gegen jedes andere Team.</p>
             </div>
 
@@ -597,7 +602,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             </AnimatePresence>
           </button>
           {isGenerating && <div className="mt-3 space-y-2 text-center text-sm text-gray-300" role="status">
-            <p>{Math.round((searchProgress?.elapsedMs || 0) / 1000)} / {searchDuration / 1000} Sekunden · {searchProgress?.attempts || 0} Suchversuche · {(searchProgress?.iterations || 0).toLocaleString('de-DE')} Varianten</p>
+            <p>{Math.round((searchProgress?.elapsedMs || 0) / 1000)} / {searchDuration / 1000} Sekunden · {searchProgress?.attempts || 0} Suchversuche · {searchProgress?.alternativesFound || 0} Pläne · {(searchProgress?.iterations || 0).toLocaleString('de-DE')} Varianten</p>
             {searchProgress?.bestDays !== null && searchProgress?.bestDays !== undefined && <p>Gültiger Plan mit {searchProgress.bestDays} Spieltagen gefunden – wird noch optimiert.</p>}
             <button onClick={cancelSearch} className="rounded-lg border border-white/20 px-4 py-2">Suche abbrechen</button>
           </div>}
@@ -618,6 +623,15 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
               {schedule && report && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
+                  <div className="glass-card rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
+                    <div><p className="font-bold">{alternatives.length} {alternatives.length === 1 ? 'Spielplan' : 'alternative Spielpläne'} zur Auswahl</p><p className="text-xs text-gray-400">Bis zu 12 unterschiedliche Pläne, nach Heimspielverteilung und Spieltagen sortiert.</p></div>
+                    <div className="flex items-center gap-3">
+                      <button aria-label="Vorheriger Spielplan" disabled={selectedPlan === 0} onClick={() => selectPlan(selectedPlan - 1)} className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-30">←</button>
+                      <span aria-live="polite">Plan {selectedPlan + 1} / {alternatives.length}</span>
+                      <button aria-label="Nächster Spielplan" disabled={selectedPlan >= alternatives.length - 1} onClick={() => selectPlan(selectedPlan + 1)} className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-30">→</button>
+                    </div>
+                    <div className="w-full flex flex-wrap gap-2">{teams.map(t => <span key={t.id} className="text-xs rounded bg-white/5 px-2 py-1">{t.name}: {report.homeGameDistribution[t.id] || 0} Heimspieltage</span>)}</div>
+                  </div>
                   <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                     {[
                       { label: 'Spieltage', value: report.matchesPerDay.length },
