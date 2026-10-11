@@ -540,7 +540,17 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 </div>
                 <p className="text-[10px] opacity-50 font-mono uppercase">Maximale Anzahl an Spielen pro Team an einem Tag.</p>
               </div>
-            <label className="block space-y-2 text-sm"><span className="font-medium">Maximale Spieltage pro Team <span className="text-xs text-gray-400">(optional)</span></span><input aria-label="Maximale Spieltage pro Team" type="number" min="1" max="1000" step="1" value={draft.maxDaysPerTeam??''} placeholder="Unbegrenzt" onChange={e=>{const value=e.target.value;const n=Number(value);if(value!==''&&(!Number.isInteger(n)||n<1||n>1000))return;setDraft(prev=>({...prev,maxDaysPerTeam:value===''?undefined:n}));}} className="block w-36 rounded bg-white/10 px-3 py-2"/><span className="block text-xs text-gray-400">Gilt für jedes Team einzeln. Mehrere Spiele am selben Tag zählen als ein Spieltag; der Saisonabschluss zählt mit. Leeres Feld = unbegrenzt.</span></label>
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 border-b border-white/10 pb-2">
+                <BarChart3 size={20} className="text-blue-400" />
+                <h2 className="font-bold text-xl">Maximale Spieltage pro Team</h2>
+              </div>
+              <div className="flex items-center gap-4">
+                <input aria-label="Maximale Spieltage pro Team" aria-valuetext={draft.maxDaysPerTeam===undefined?'Unbegrenzt':String(draft.maxDaysPerTeam)} type="range" min="0" max={Math.min(1000,Math.max(20,(teams.length-1)*matchMode,draft.maxDaysPerTeam??0))} step="1" value={draft.maxDaysPerTeam??0} onChange={e=>{const n=Number(e.target.value);setDraft(prev=>({...prev,maxDaysPerTeam:n===0?undefined:n}));}} className="flex-1 min-w-0 accent-blue-500 cursor-pointer" />
+                <span className="font-mono font-bold text-lg text-center text-blue-400">{draft.maxDaysPerTeam??'Unbegrenzt'}</span>
+              </div>
+              <p className="text-xs text-gray-400">Gilt für jedes Team einzeln. Mehrere Spiele am selben Tag zählen als ein Spieltag; der Saisonabschluss zählt mit. Ganz links = unbegrenzt.</p>
+            </div>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={draft.allowRepeatPairPerDay ?? false} onChange={e=>setDraft(prev=>({...prev,allowRepeatPairPerDay:e.target.checked}))} /><span>Rückspiele am selben Tag erlauben</span></label>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag: genau ein Spiel pro Team<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
             <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
