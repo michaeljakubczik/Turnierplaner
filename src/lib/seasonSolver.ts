@@ -244,7 +244,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         if (dev > 0) softDevs.push(`Der gefundene Plan verteilt die Spiele nicht exakt gleichmäßig.`);
         if (maxTeamMatches >= 3) softDevs.push(`Einige Teams spielen ${maxTeamMatches} Spiele an einem einzigen Tag.`);
         if (searchStopped) softDevs.push(`Der Suchraum war zu groß. Es wird die beste innerhalb der Sicherheitslimits gefundene Lösung angezeigt.`);
-        softDevs.push(`Optimierung: Zuerst gleichmäßig verteilte Heimspieltage, danach möglichst wenige Spieltage und wenige Anreisetage pro Team. Eine globale Bestlösung wird nicht garantiert.`);
+        softDevs.push(`Optimierung: Zuerst gleichmäßig verteilte Heimspieltage, danach möglichst wenige und zeitlich gleichmäßig über die Saison verteilte Spieltage. Anschließend gleiche Tages-Spielnummern sowie wenige Anreisetage und gute Auslastung. Eine globale Bestlösung wird nicht garantiert.`);
         softDevs.push(`Reguläre Spieltage: mindestens zwei Spiele; der Gastgeber spielt mit. Teams mit mehr als 100 km ${input.manualDistances ? 'eingetragener Entfernung (sonst Luftlinie)' : input.distanceMode === 'road' ? 'Straßenentfernung' : 'Luftlinie'} zum Gastgeber spielen mindestens zweimal. Der gemeinsame Saisonabschluss ist von diesen Mindestzahlen ausgenommen.`);
         softDevs.push(`Optimierung: Die Suche bevorzugt eine gleichmäßige Verteilung der Heimspieltage.`);
 
@@ -271,6 +271,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         if (now - attemptStartedAt > 1000 || iterations - attemptStartIteration > 20000) { attemptStopped = true; return true; }
         return false;
       };
+      const dateTimes = new Map(dates.map(d=>[d.id,Date.parse(d.value)]));
       const placements = (match: Match, current: Schedule) => dates.flatMap(date => {
         const day = current[date.id] || { matches: [], hostId: '' };
         if (day.matches.length >= maxMatchesPerDay || !availability[match.teamA]?.[date.id] || !availability[match.teamB]?.[date.id]) return [];
@@ -335,7 +336,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
           seenPlans.add(signature);
           const ordered = Object.fromEntries(Object.entries(balanced).map(([id, day]) => [id, {...day, matches: orderDayMatches(day.matches)}]));
           candidates.push({ schedule: ordered, score: getScore(ordered), spread: Math.max(...homeCounts) - Math.min(...homeCounts), days: Object.keys(ordered).length, signature });
-          candidates.sort((a,b) => comparePlans({schedule:a.schedule,report:null!}, {schedule:b.schedule,report:null!}, teams));
+          candidates.sort((a,b) => comparePlans({schedule:a.schedule,report:null!}, {schedule:b.schedule,report:null!}, teams, dates));
           if (candidates.length > MAX_ALTERNATIVES) candidates.pop();
           bestSchedule = candidates[0].schedule; bestDayCount = candidates[0].days;
           if (firstSolutionAt === null) firstSolutionAt = performance.now();
@@ -398,11 +399,13 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         if (chosenIndex < 0) return;
         const nextRemaining = remaining.filter((_, index) => index !== chosenIndex);
         const optionOrder = new Map(chosenOptions.map(option => [option.dateId, attempts === 1 ? 0 : random()]));
+        const usedTimes=Object.keys(current).map(id=>dateTimes.get(id)!);
+        const spacingPreference=(id:string)=>usedTimes.length?-Math.min(...usedTimes.map(time=>Math.abs(dateTimes.get(id)!-time))):0;
         chosenOptions.sort((a, b) => {
-          // Cover the finale early, then consolidate games on already used days.
+          // Cover the finale and consolidate games; when opening a day, try well-spaced dates first.
           const finalA = allTeamsOnFinalDay && a.dateId === finalDateId ? -1 : 0;
           const finalB = allTeamsOnFinalDay && b.dateId === finalDateId ? -1 : 0;
-          return finalA - finalB || b.matches.length - a.matches.length || (optionOrder.get(a.dateId)! - optionOrder.get(b.dateId)!);
+          return finalA - finalB || b.matches.length - a.matches.length || spacingPreference(a.dateId)-spacingPreference(b.dateId) || (optionOrder.get(a.dateId)! - optionOrder.get(b.dateId)!);
         });
         for (const option of chosenOptions) {
           if (searchLimitReached()) return;

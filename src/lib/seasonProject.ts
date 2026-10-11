@@ -1,3 +1,4 @@
+import { seasonSpacingPenalty } from './seasonSpacing';
 import type { Availability, DateEntry, HomeAvailability, MatchMode, PlanAlternative, Schedule, SeasonInput, Team } from './seasonSolver';
 import { journeyKm, type RoadDistances, type ManualDistances } from './teamTravel';
 import { matchOrdinals } from './orderDayMatches';
@@ -11,7 +12,7 @@ export type SeasonProject = { format: 'turnierplaner-project'; version: 1; draft
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${stable(v)}`).join(',')}}` : JSON.stringify(value) ?? 'null';
 export const draftKey = (draft: SeasonDraft) => stable({ ...draft, allowUnevenHomeDays: undefined, teams: [...draft.teams].sort((a,b)=>a.id.localeCompare(b.id)), dates: [...draft.dates].sort((a,b)=>a.id.localeCompare(b.id)), seasonYear: draft.seasonYear ?? 2026, allTeamsOnFinalDay: draft.allTeamsOnFinalDay ?? false, maxTripleDaysPerTeam: draft.maxTripleDaysPerTeam ?? 1 });
 export const scheduleSignature = (schedule: Schedule) => Object.entries(schedule).sort(([a],[b])=>a.localeCompare(b)).map(([id,day])=>`${id}:${day.hostId}:${day.matches.map(m=>[m.teamA,m.teamB].sort().join('/')).sort().join(',')}`).join('|');
-export function planRank(plan: PlanAlternative, teams: Team[]): number[] {
+export function planRank(plan: PlanAlternative, teams: Team[], dates: DateEntry[] = []): number[] {
   const days = Object.values(plan.schedule);
   const home = teams.map(t=>days.filter(d=>d.hostId===t.id).length);
   const ordinals = days.flatMap(d=>matchOrdinals(d.matches));
@@ -19,10 +20,10 @@ export function planRank(plan: PlanAlternative, teams: Team[]): number[] {
   const avg = counts.reduce((a,b)=>a+b,0)/Math.max(1,counts.length);
   const variance = counts.reduce((a,b)=>a+(b-avg)**2,0)/Math.max(1,counts.length);
   const appearances = teams.map(t=>days.map(d=>d.matches.filter(m=>m.teamA===t.id||m.teamB===t.id).length));
-  return [Math.max(...home)-Math.min(...home), days.length, ordinals.filter(x=>x.a!==x.b).length, ordinals.reduce((n,x)=>n+(x.a-x.b)**2,0), appearances.flat().filter(n=>n===1).length*250 + appearances.flat().filter(n=>n>0).length*500 + counts.filter(n=>n===2).length*500 + variance*10];
+  return [Math.max(...home)-Math.min(...home), days.length, seasonSpacingPenalty(plan.schedule,teams,dates), ordinals.filter(x=>x.a!==x.b).length, ordinals.reduce((n,x)=>n+(x.a-x.b)**2,0), appearances.flat().filter(n=>n===1).length*250 + appearances.flat().filter(n=>n>0).length*500 + counts.filter(n=>n===2).length*500 + variance*10];
 }
-export function comparePlans(a: PlanAlternative, b: PlanAlternative, teams: Team[]) {
-  const ar=planRank(a,teams), br=planRank(b,teams);
+export function comparePlans(a: PlanAlternative, b: PlanAlternative, teams: Team[], dates: DateEntry[] = []) {
+  const ar=planRank(a,teams,dates), br=planRank(b,teams,dates);
   return ar.map((v,i)=>v-br[i]).find(v=>v!==0) || scheduleSignature(a.schedule).localeCompare(scheduleSignature(b.schedule));
 }
 export function mergePlans(previous: SavedPlan[], incoming: PlanAlternative[], draft: SeasonDraft): SavedPlan[] {
