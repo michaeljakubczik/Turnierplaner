@@ -1,15 +1,15 @@
 import type { Availability, DateEntry, HomeAvailability, MatchMode, PlanAlternative, Schedule, SeasonInput, Team } from './seasonSolver';
-import { journeyKm, type RoadDistances } from './teamTravel';
+import { journeyKm, type RoadDistances, type ManualDistances } from './teamTravel';
 import { matchOrdinals } from './orderDayMatches';
 export type SeasonDraft = {
-  distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; seasonYear?: number; allowRepeatPairPerDay?: boolean; allowUnevenHomeDays?: boolean; allTeamsOnFinalDay?: boolean; maxTripleDaysPerTeam?: number;
+  distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; manualDistances?: ManualDistances; seasonYear?: number; allowRepeatPairPerDay?: boolean; allTeamsOnFinalDay?: boolean; maxTripleDaysPerTeam?: number;
   teams: Team[]; dates: DateEntry[]; availability: Availability; homeAvailability: HomeAvailability;
   matchMode: MatchMode; maxMatchesPerDay: number; maxMatchesPerTeamPerDay: number;
 };
 export type SavedPlan = PlanAlternative & { id: string; draft: SeasonDraft; favorite: boolean; createdAt: string };
 export type SeasonProject = { format: 'turnierplaner-project'; version: 1; draft: SeasonDraft; plans: SavedPlan[]; selectedId: string | null; seen: Record<string, string[]>; holidayRegions: string[] };
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${stable(v)}`).join(',')}}` : JSON.stringify(value) ?? 'null';
-export const draftKey = (draft: SeasonDraft) => stable({ ...draft, teams: [...draft.teams].sort((a,b)=>a.id.localeCompare(b.id)), dates: [...draft.dates].sort((a,b)=>a.id.localeCompare(b.id)), seasonYear: draft.seasonYear ?? 2026, allTeamsOnFinalDay: draft.allTeamsOnFinalDay ?? false, maxTripleDaysPerTeam: draft.maxTripleDaysPerTeam ?? 1 });
+export const draftKey = (draft: SeasonDraft) => stable({ ...draft, allowUnevenHomeDays: undefined, teams: [...draft.teams].sort((a,b)=>a.id.localeCompare(b.id)), dates: [...draft.dates].sort((a,b)=>a.id.localeCompare(b.id)), seasonYear: draft.seasonYear ?? 2026, allTeamsOnFinalDay: draft.allTeamsOnFinalDay ?? false, maxTripleDaysPerTeam: draft.maxTripleDaysPerTeam ?? 1 });
 export const scheduleSignature = (schedule: Schedule) => Object.entries(schedule).sort(([a],[b])=>a.localeCompare(b)).map(([id,day])=>`${id}:${day.hostId}:${day.matches.map(m=>[m.teamA,m.teamB].sort().join('/')).sort().join(',')}`).join('|');
 export function planRank(plan: PlanAlternative, teams: Team[]): number[] {
   const days = Object.values(plan.schedule);
@@ -42,9 +42,10 @@ const integer=(x:unknown,min:number,max:number)=>Number.isInteger(x)&&Number(x)>
 const text=(x:unknown): x is string =>typeof x==='string'&&x.length>0&&x.length<1000;
 function validDraft(x: unknown): x is SeasonDraft {
   if(!obj(x)||!Array.isArray(x.teams)||x.teams.length<2||x.teams.length>100||!Array.isArray(x.dates)||x.dates.length>1000||!integer(x.matchMode,1,4)||!integer(x.maxMatchesPerDay,1,10)||!integer(x.maxMatchesPerTeamPerDay,1,3))return false;
+  if (x.manualDistances !== undefined && (!obj(x.manualDistances) || !Object.values(x.manualDistances).every(v=>obj(v)&&typeof v.placesKey==='string'&&typeof v.km==='number'&&Number.isFinite(v.km)&&v.km>=0&&v.km<=50000))) return false;
   if (x.distanceMode !== undefined && !['air','road'].includes(String(x.distanceMode))) return false;
   if (x.roadDistances !== undefined && (!obj(x.roadDistances) || typeof x.roadDistances.placesKey !== 'string' || !obj(x.roadDistances.km) || !Object.values(x.roadDistances.km).every(row=>obj(row)&&Object.values(row).every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0)))) return false;
-  if(x.seasonYear!==undefined&&!integer(x.seasonYear,1900,2200)||x.maxTripleDaysPerTeam!==undefined&&!integer(x.maxTripleDaysPerTeam,0,1000)||x.allTeamsOnFinalDay!==undefined&&typeof x.allTeamsOnFinalDay!=='boolean'||x.allowRepeatPairPerDay!==undefined&&typeof x.allowRepeatPairPerDay!=='boolean'||x.allowUnevenHomeDays!==undefined&&typeof x.allowUnevenHomeDays!=='boolean')return false;
+  if(x.seasonYear!==undefined&&!integer(x.seasonYear,1900,2200)||x.maxTripleDaysPerTeam!==undefined&&!integer(x.maxTripleDaysPerTeam,0,1000)||x.allTeamsOnFinalDay!==undefined&&typeof x.allTeamsOnFinalDay!=='boolean'||x.allowRepeatPairPerDay!==undefined&&typeof x.allowRepeatPairPerDay!=='boolean')return false;
   if(!x.teams.every(t=>obj(t)&&text(t.id)&&typeof t.name==='string'&&t.name.length<1000&&integer(t.maxCapacity,2,100)&&(t.homeLocationQuery===undefined||typeof t.homeLocationQuery==='string')&&(t.homePlace===undefined||obj(t.homePlace)&&text(t.homePlace.label)&&typeof t.homePlace.latitude==='number'&&Math.abs(t.homePlace.latitude)<=90&&typeof t.homePlace.longitude==='number'&&Math.abs(t.homePlace.longitude)<=180)))return false;
   if(!x.dates.every(d=>obj(d)&&text(d.id)&&typeof d.value==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d.value)&&!isNaN(Date.parse(d.value))&&new Date(d.value).toISOString().slice(0,10)===d.value))return false;
   const teams=new Set(x.teams.map(t=>t.id)), dates=new Set(x.dates.map(d=>d.id));
@@ -74,8 +75,7 @@ function validPlan(x: unknown): x is SavedPlan {
     }
   }
   if(input.allTeamsOnFinalDay&&(!input.finalDayCandidate||!x.schedule[input.finalDayCandidate.id]))return false;
-  const hc=input.teams.map(t=>home[t.id]||0);
-  if(!input.allowUnevenHomeDays&&Math.min(...hc)===0&&Math.max(...hc)>=4||Object.values(triples).some(n=>n>input.maxTripleDaysPerTeam)||pairs.size!==input.teams.length*(input.teams.length-1)/2||[...pairs.values()].some(n=>n!==input.matchMode))return false;
+  if(Object.values(triples).some(n=>n>input.maxTripleDaysPerTeam)||pairs.size!==input.teams.length*(input.teams.length-1)/2||[...pairs.values()].some(n=>n!==input.matchMode))return false;
   const r=x.report;
   return Array.isArray(r.matchesPerDay)&&r.matchesPerDay.every(n=>integer(n,1,10))&&r.matchesPerDay.reduce<number>((a,b)=>a+Number(b),0)===Object.values(x.schedule).reduce<number>((n,d)=>n+(d as {matches:unknown[]}).matches.length,0)&&typeof r.deviation==='number'&&Number.isFinite(r.deviation)&&integer(r.maxMatchesPerTeamPerDay,1,3)&&obj(r.homeGameDistribution)&&Object.values(r.homeGameDistribution).every(n=>integer(n,0,1000))&&input.teams.every(t=>(r.homeGameDistribution as Record<string,number>)[t.id]===home[t.id]||((r.homeGameDistribution as Record<string,number>)[t.id]||0)===(home[t.id]||0))&&r.hardConstraintsSatisfied===true&&Array.isArray(r.softConstraintDeviations)&&r.softConstraintDeviations.every(s=>typeof s==='string');
 }

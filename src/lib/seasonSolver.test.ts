@@ -113,13 +113,12 @@ test('whole-season host assignment gives four eligible teams one day each', () =
   for (const team of input.teams) assert.equal(Object.values(balanced).filter(day => day.hostId === team.id).length, 1);
 });
 
-test('unavoidable zero-versus-four home distribution gives an actionable conflict', () => {
-  const input = fixture(6, 50);
-  input.maxMatchesPerDay = 2;
-  input.homeAvailability = Object.fromEntries(input.teams.map(t => [t.id, t.id === 't0' ? input.availability.t0 : {}]));
-  const result = solveSeason(input, { durationMs: 3000 });
-  assert.equal(result.schedule, null);
-  assert.match(result.error!, /Keine zulässige Heimspielverteilung/);
+test('teams without home dates do not block a four-day single-host season', () => {
+  const input=fixture(3,4);input.matchMode=4;input.maxMatchesPerDay=3;
+  input.homeAvailability=Object.fromEntries(input.teams.map(t=>[t.id,t.id==='t0'?input.availability.t0:{}]));
+  const result=solveSeason(input,{durationMs:500});validate(input,result);
+  assert.equal(result.report!.homeGameDistribution.t0,4);
+  assert.ok(result.report!.softConstraintDeviations.some(s=>s.includes('Keine Heimspielmöglichkeiten')));
 });
 
 test('game ordering aligns first, second and third appearances when possible', async () => {
@@ -156,13 +155,12 @@ test('diagnostics identify missing shared dates and respect triple-day limits', 
   assert.equal(spacious.filter(t=>t.proven).length, 0);
 });
 
-test('same-day return games and uneven host exceptions are explicit and preserved',()=>{
+test('same-day return games remain explicit while host imbalance is always allowed',()=>{
   const input=fixture(2,1,2);input.maxMatchesPerDay=2;input.maxMatchesPerTeamPerDay=2;input.allowRepeatPairPerDay=true;
   const r=solveSeason(input,{durationMs:100});assert.ok(r.schedule,r.error||'');assert.equal(Object.values(r.schedule!)[0].matches.length,2);
   const constrained=fixture(3,4,2);constrained.matchMode=4;constrained.maxMatchesPerDay=3;constrained.maxMatchesPerTeamPerDay=2;
   constrained.teams.forEach(t=>constrained.homeAvailability[t.id]={});constrained.homeAvailability.t0=structuredClone(constrained.availability.t0);
-  assert.match(solveSeason(constrained,{durationMs:100}).error!,/Heimspielverteilung/);
-  constrained.allowUnevenHomeDays=true;assert.ok(solveSeason(constrained,{durationMs:300}).schedule);
+  assert.ok(solveSeason(constrained,{durationMs:300}).schedule);
 });
 test('finale-only plan does not require locations, and search publishes retained candidates before completion',()=>{
   const input=fixture(2,1,1,true);input.teams.forEach(t=>delete t.homePlace);

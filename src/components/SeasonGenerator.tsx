@@ -1,3 +1,4 @@
+import { weekendSlots } from '../lib/weekendCalendar';
 import { matchOrdinals } from '../lib/orderDayMatches';
 import type { PlanningTip } from '../lib/planningDiagnostics';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
@@ -22,7 +23,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { calendarPeriods, periodMarks, hasVacationData, regionNames, type Region } from '../lib/seasonCalendar';
-import { journeyKm, roadPlacesKey, fetchRoadDistances, findHomePlaces, type HomePlace } from '../lib/teamTravel';
+import { journeyKm, manualKm, travelPairKey, travelPairPlacesKey, findHomePlaces, type HomePlace } from '../lib/teamTravel';
 import { comparePlans, draftKey, emptyProject, mergePlans, parseProject, scheduleSignature, type SeasonDraft, type SeasonProject } from '../lib/seasonProject';
 
 import type { Team, MatchMode, DateEntry, Availability, HomeAvailability, Schedule, ValidationReport, SearchProgress, SeasonInput, SolverResult, PlanAlternative } from '../lib/seasonSolver';
@@ -74,7 +75,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const [project, setProject] = useState<SeasonProject>(() => {
     try {
       const stored = localStorage.getItem('turnierplaner_project_v1');
-      if (stored) return parseProject(JSON.parse(stored));
+      if (stored) {const p=parseProject(JSON.parse(stored));return {...p,draft:{...p.draft,distanceMode:'air' as const}};}
       const legacy = localStorage.getItem('matchmaster_season_draft_v2');
       if (legacy) { const saved = JSON.parse(legacy); if (saved._schemaVersion === 1) return parseProject(emptyProject(saved.data)); }
     } catch { storageBlocked.current = true; }
@@ -115,33 +116,18 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       if (file.size > 25 * 1024 * 1024) throw new Error('Projektdatei zu groß (maximal 25 MB).');
       const loaded = parseProject(JSON.parse(await file.text()));
       (Object.values(placeRequests.current) as AbortController[]).forEach(r=>r.abort());
-      roadRequest.current?.abort(); roadConsent.current=false; setIsRouting(false);
       storageBlocked.current = false;
-      setProject(loaded); setPlanView('all'); setCalendarTeamId(''); setAvailabilityUndo(null);
+      setProject({...loaded,draft:{...loaded.draft,distanceMode:'air'}}); setPlanView('all'); setCalendarTeamId(''); setAvailabilityUndo(null);
       setPlaceChoices({}); setPlaceMessages({}); setError(null); setTips([]);
       setProjectNotice('Projekt geladen. Eingaben, Spielpläne und Favoriten wurden wiederhergestellt.');
     } catch (e) { setProjectNotice(e instanceof Error ? e.message : 'Projektdatei konnte nicht geladen werden.'); }
     finally { if(inputFile.current) inputFile.current.value=''; }
   };
 
-  const [roadStatus, setRoadStatus] = useState('');
-  const [isRouting, setIsRouting] = useState(false);
-  const roadRequest = useRef<AbortController | null>(null);
-  const lastRoadRequestAt = useRef(0);
-  const roadConsent = useRef(false);
-  const prepareRoadDistances = async () => {
-    if (Date.now()-lastRoadRequestAt.current < 1100) return;
-    lastRoadRequestAt.current=Date.now(); roadRequest.current?.abort();
-    const controller=new AbortController();roadRequest.current=controller;const key=roadPlacesKey(draft.teams);
-    setIsRouting(true);setRoadStatus('Straßenentfernungen werden abgerufen …');
-    try {const roadDistances=await fetchRoadDistances(draft.teams,controller.signal);if(controller.signal.aborted)return;
-      setDraft(prev=>roadPlacesKey(prev.teams)===key?{...prev,distanceMode:'road',roadDistances}:prev);setRoadStatus('Straßenentfernungen gespeichert. Neue bestätigte Orte werden in dieser Sitzung automatisch neu berechnet.');
-    } catch(e){if(!controller.signal.aborted)setRoadStatus(e instanceof Error?e.message:'Abfrage fehlgeschlagen.');}
-    finally {if(roadRequest.current===controller)setIsRouting(false);}
-  };
-  useEffect(()=>()=>roadRequest.current?.abort(),[]);
-  const currentRoadKey=roadPlacesKey(draft.teams);
-  useEffect(()=>{if(roadConsent.current&&draft.distanceMode==='road'&&draft.roadDistances?.placesKey!==currentRoadKey&&draft.teams.every(t=>t.homePlace)) {const timer=setTimeout(()=>prepareRoadDistances(),1100);return ()=>clearTimeout(timer);}},[currentRoadKey,draft.distanceMode]);
+  const [distanceMenuOpen,setDistanceMenuOpen]=useState(false);
+  const distanceDialog=useRef<HTMLDialogElement>(null);
+  useEffect(()=>{if(distanceMenuOpen)distanceDialog.current?.showModal();else distanceDialog.current?.close();},[distanceMenuOpen]);
+  const distancePairs=draft.teams.flatMap((a,i)=>draft.teams.slice(i+1).map(b=>({a,b,key:travelPairKey(a,b)})));
   const [placeChoices, setPlaceChoices] = useState<Record<string, HomePlace[]>>({});
   const [placeMessages, setPlaceMessages] = useState<Record<string, string>>({});
   const placeRequests = useRef<Record<string, AbortController>>({});
@@ -229,7 +215,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         days.push({ id: draft.dates.find(d => d.value === value)?.id ?? value, value });
       }
     }
-    return { name: new Date(seasonYear, month, 1).toLocaleDateString('de-DE', { month: 'long' }), days };
+    return { name: new Date(seasonYear, month, 1).toLocaleDateString('de-DE', { month: 'long' }), days, slots: weekendSlots(days) };
   }), [seasonYear, draft.dates]);
   const selectCalendarDay = (date: DateEntry, kind: 'date' | 'available' | 'home') => {
     setDraft(prev => {
@@ -390,7 +376,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     setSearchProgress({ iterations: 0, attempts: 0, elapsedMs: 0, bestDays: null });
     const durationMs = thorough ? 120000 : 30000;
     setSearchDuration(durationMs);
-    const input: SeasonInput = { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates, allowRepeatPairPerDay: draft.allowRepeatPairPerDay, allowUnevenHomeDays: draft.allowUnevenHomeDays, distanceMode:draft.distanceMode, roadDistances:draft.roadDistances };
+    const input: SeasonInput = { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates, allowRepeatPairPerDay: draft.allowRepeatPairPerDay, distanceMode:'air', manualDistances:draft.manualDistances };
     try {
       const worker = new Worker(new URL('../lib/seasonSolver.worker.ts', import.meta.url), { type: 'module' });
       workerRef.current = worker;
@@ -521,7 +507,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-gray-400">Die Planung bevorzugt eine gleichmäßige Verteilung der Heimspieltage. Die Ausnahme für null gegenüber vier oder mehr Heimspieltagen ist unten wählbar.</p>
+              <p className="text-xs text-gray-400">Die Planung bevorzugt eine gleichmäßige Verteilung der Heimspieltage und berücksichtigt dabei die eingetragenen Heimspielmöglichkeiten.</p>
             <p className="text-xs text-gray-400">Reguläre Spieltage: mindestens zwei Spiele, bevorzugt drei oder mehr. Der Planer bevorzugt möglichst wenige Spieltage.</p>
               <p className="text-[10px] opacity-50 font-mono uppercase">Jedes Team spielt {matchMode}-mal gegen jedes andere Team.</p>
             </div>
@@ -549,9 +535,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 </div>
                 <p className="text-[10px] opacity-50 font-mono uppercase">Maximale Anzahl an Spielen pro Team an einem Tag.</p>
               </div>
-            <div className="space-y-2 text-xs text-gray-300"><p>Entfernungsgrundlage: {draft.distanceMode==='road'?'Straßenentfernung':'Luftlinie (lokal)'}</p><button type="button" disabled={isRouting} onClick={()=>{roadConsent.current=true;prepareRoadDistances();}} className="rounded bg-white/10 px-3 py-2 disabled:opacity-40">Straßenkilometer berechnen und verwenden</button><button type="button" onClick={()=>{roadRequest.current?.abort();setIsRouting(false);setDraft(prev=>({...prev,distanceMode:'air'}));setRoadStatus('');}} className="ml-2 rounded bg-white/10 px-3 py-2">Luftlinie verwenden</button><p>Mit „Straßenkilometer berechnen“ werden die Koordinaten aller Heimspielorte an routing.openstreetmap.de (FOSSGIS) übermittelt. Ergebnisse bleiben im Projekt gespeichert. Nach bestätigten Ortsänderungen wird in dieser Sitzung automatisch neu berechnet; nach dem Laden eines Projekts bei Bedarf erneut abrufen.</p><p role="status">{roadStatus}</p><a href="https://routing.openstreetmap.de/about.html" target="_blank" rel="noreferrer" className="underline">Dienst & Datenschutz</a> · © OpenStreetMap-Mitwirkende · <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noreferrer" className="underline">Karte korrigieren</a></div>
+            <button type="button" onClick={()=>setDistanceMenuOpen(true)} className="rounded bg-white/10 px-3 py-2 text-xs">Entfernungen eintragen</button>
+            <p className="text-xs text-gray-400">Standard: Luftlinie. Manuell eingetragene Wegstrecken ersetzen sie für das jeweilige Teampaar.</p>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={draft.allowRepeatPairPerDay ?? false} onChange={e=>setDraft(prev=>({...prev,allowRepeatPairPerDay:e.target.checked}))} /><span>Rückspiele am selben Tag erlauben</span></label>
-            <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={draft.allowUnevenHomeDays ?? false} onChange={e=>setDraft(prev=>({...prev,allowUnevenHomeDays:e.target.checked}))} /><span>Ungleiche Heimspielverteilung als Ausnahme erlauben<br/><span className="text-xs text-gray-400">Auch 0 Heimspieltage bei einem Team und 4 oder mehr bei einem anderen. Gleichmäßigkeit bleibt ein Optimierungsziel.</span></span></label>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag: genau ein Spiel pro Team<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
             <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
               <input aria-label="Maximale Drei-Spiele-Tage" type="number" min="0" max="100" value={maxTripleDaysPerTeam} onChange={e => setDraft(prev => ({ ...prev, maxTripleDaysPerTeam: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))} className="ml-3 w-16 bg-white/10 rounded p-2" />
@@ -604,7 +590,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             </div>
             <p className="text-[10px] opacity-50 font-mono uppercase pt-2 border-t border-white/5">
               MAX = Maximale Anzahl an Teams bei Heimspielen (Hallenkapazität).
-              <span className="block mt-2 normal-case font-sans">Ortssuche: Photon / © OpenStreetMap-Mitwirkende. Luftlinie wird lokal berechnet; Straßenkilometer können oben ausdrücklich abgerufen werden. Über 100 km nach gewählter Grundlage: mindestens zwei Spiele pro Gastteam; am gemeinsamen Saisonabschluss genau eines.</span>
+              <span className="block mt-2 normal-case font-sans">Ortssuche: Photon / © OpenStreetMap-Mitwirkende. Luftlinie wird lokal berechnet; Wegstrecken können über „Entfernungen eintragen“ ergänzt werden. Über 100 km nach gewählter Grundlage: mindestens zwei Spiele pro Gastteam; am gemeinsamen Saisonabschluss genau eines.</span>
             </p>
           </section>
 
@@ -620,7 +606,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               {weekends.map(month => <div key={month.name} className="bg-black/20 rounded-xl p-2">
                 <h3 className="font-bold text-sm mb-2">{month.name}</h3>
                 <div className="grid grid-cols-2 gap-1">
-                  {month.days.map(date => {
+                  {month.slots.map((date,index) => {
+                    if(!date)return <div key={`empty-${index}`} aria-hidden="true"/>;
                     const selected = dates.some(d => d.id === date.id);
                     const marks = holidayRegions.flatMap(region => periodMarks(date.value, holidayPeriods[region] || []).map(mark => ({ ...mark, region })));
                     const isHoliday = marks.some(mark => mark.kind === 'holiday');
@@ -765,7 +752,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                               const host = resultTeams.find(h => h.id === day.hostId)!;
                               const km = journeyKm(t,host,selected?.draft ?? draft);
                               const count = day.matches.filter(m => m.teamA === t.id || m.teamB === t.id).length;
-                              return <span key={t.id} className="text-xs text-gray-300 bg-white/5 rounded px-2 py-1">{t.name}: {count} {count === 1 ? 'Spiel' : 'Spiele'} · {t.id === host.id ? 'Gastgeber' : `${km === null ? 'Entfernung unbekannt' : Math.round(km) + (selected?.draft.distanceMode==='road'?' km Straße':' km Luftlinie')}${km !== null && km > 100 ? ' (weite Anreise)' : ''}`}</span>;
+                              return <span key={t.id} className="text-xs text-gray-300 bg-white/5 rounded px-2 py-1">{t.name}: {count} {count === 1 ? 'Spiel' : 'Spiele'} · {t.id === host.id ? 'Gastgeber' : `${km === null ? 'Entfernung unbekannt' : Math.round(km) + (manualKm(t,host,selected?.draft ?? draft)!==null?' km eingetragen':selected?.draft.distanceMode==='road'?' km Straße':' km Luftlinie')}${km !== null && km > 100 ? ' (weite Anreise)' : ''}`}</span>;
                             })}
                           </div>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -852,6 +839,13 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           </section>
         </div>
       </main>
+
+      <dialog ref={distanceDialog} onCancel={()=>setDistanceMenuOpen(false)} onClose={()=>setDistanceMenuOpen(false)} className="bg-gray-900 text-white rounded-2xl p-5 w-[min(95vw,640px)] max-h-[85vh] backdrop:bg-black/70">
+        <h2 className="text-xl font-bold">Wegstrecken eintragen</h2>
+        <p className="text-sm text-gray-300 my-3">Jedes Teampaar erscheint einmal. Die Wegstrecke gilt für beide Richtungen und ersetzt die Luftlinie bei der Planung. Leeres Feld = Luftlinie. Änderungen an einem bestätigten Heimspielort machen dessen Einträge ungültig.</p>
+        <div className="space-y-3">{distancePairs.map(({a,b,key})=>{const km=manualKm(a,b,draft);return <label key={key} className="grid grid-cols-[1fr_100px] gap-3 items-center text-sm"><span>{a.name} ↔ {b.name}<span className="block text-xs text-gray-400">{a.homePlace?.label ?? 'Heimspielort fehlt'} ↔ {b.homePlace?.label ?? 'Heimspielort fehlt'} · Luftlinie: {a.homePlace&&b.homePlace?`${Math.round(journeyKm(a,b,{teams})!)} km`:'unbekannt'}{draft.manualDistances?.[key]&&km===null?' · Ort geändert: bitte neu eintragen':''}</span></span><span><input aria-label={`Wegstrecke ${a.name} – ${b.name}`} type="number" min="0" max="50000" step="any" disabled={!a.homePlace||!b.homePlace} value={km??''} placeholder="km" onChange={e=>{const value=e.target.value;const n=Number(value);if(value!==''&&(!Number.isFinite(n)||n<0||n>50000))return;setDraft(prev=>{const entries={...prev.manualDistances};if(value==='')delete entries[key];else entries[key]={km:n,placesKey:travelPairPlacesKey(a,b)};return {...prev,manualDistances:entries,distanceMode:'air'};});}} className="w-full rounded bg-white/10 p-2"/> km</span></label>;})}</div>
+        <button type="button" onClick={()=>setDistanceMenuOpen(false)} className="mt-5 rounded bg-blue-600 px-4 py-2">Fertig</button>
+      </dialog>
 
       <footer className="mt-20 border-t border-white/10 p-10 text-center">
         <p className="text-[10px] font-mono uppercase opacity-40 tracking-[0.2em]">

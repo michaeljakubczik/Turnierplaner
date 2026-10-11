@@ -2,7 +2,7 @@ import { comparePlans, scheduleSignature } from './seasonProject';
 import { analyzeSeason, type PlanningTip } from './planningDiagnostics';
 import { orderDayMatches, matchOrdinals } from './orderDayMatches';
 import { balanceHosts } from './balanceHosts';
-import { journeyKm, roadPlacesKey, type RoadDistances, type HomePlace } from './teamTravel';
+import { journeyKm, roadPlacesKey, type RoadDistances, type ManualDistances, type HomePlace } from './teamTravel';
 export type Team = {
   id: string;
   name: string;
@@ -46,7 +46,7 @@ export type SeasonInput = {
   teams: Team[]; seasonDates: DateEntry[]; availability: Availability;
   homeAvailability: HomeAvailability; matchMode: MatchMode;
   maxMatchesPerDay: number; maxMatchesPerTeamPerDay: number;
-  distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; maxTripleDaysPerTeam: number; allTeamsOnFinalDay: boolean; allowRepeatPairPerDay?: boolean; allowUnevenHomeDays?: boolean;
+  distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; manualDistances?: ManualDistances; maxTripleDaysPerTeam: number; allTeamsOnFinalDay: boolean; allowRepeatPairPerDay?: boolean;
   finalDayCandidate?: DateEntry; ignoredLateDates: number;
 };
 export type SearchProgress = { iterations: number; attempts: number; elapsedMs: number; bestDays: number | null; alternativesFound?: number; checkpoint?: PlanAlternative[]; foundSignatures?: string[] };
@@ -123,14 +123,6 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
       if (totalMatches > dates.length * maxMatchesPerDay) {
         setError(`Unmöglich: Die Gesamtanzahl der Spiele (${totalMatches}) übersteigt die maximale Kapazität von ${dates.length * maxMatchesPerDay} (${dates.length} Tage * ${maxMatchesPerDay} Spiele/Tag). Füge mehr Daten hinzu oder reduziere den Spielmodus.`);
         
-        return;
-      }
-
-      const hostableTeams = teams.filter(t => dates.some(d => availability[t.id]?.[d.id] && homeAvailability[t.id]?.[d.id] && t.maxCapacity >= 2));
-      const minimumDays = allTeamsOnFinalDay ? 1 + Math.ceil((totalMatches - teams.length / 2) / maxMatchesPerDay) : Math.ceil(totalMatches / maxMatchesPerDay);
-      if (!input.allowUnevenHomeDays && hostableTeams.length < teams.length && minimumDays > hostableTeams.length * 3) {
-        const withoutHomeDays = teams.filter(t => !hostableTeams.some(host => host.id === t.id));
-        setError(`Keine zulässige Heimspielverteilung: ${withoutHomeDays.map(t => t.name).join(', ')} können mit den eingetragenen Heimspielmöglichkeiten keinen Spieltag ausrichten. Für mindestens ${minimumDays} Spieltage würden andere Teams vier oder mehr Heimspieltage benötigen. Aktiviere weitere Heimspielmöglichkeiten oder erhöhe passende Gastgeberkapazitäten.`);
         return;
       }
 
@@ -241,6 +233,8 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         const mismatches = Object.values(plan).reduce((sum, day) => sum + matchOrdinals(day.matches).filter(x => x.a !== x.b).length, 0);
         softDevs.push(`Spielreihenfolge: ${mismatches} Begegnungen mit unterschiedlicher Tages-Spielnummer. Für die jeweiligen Paarungen ist die Anzahl solcher Abweichungen minimal; danach wird deren Größe minimiert.`);
         const homeCounts = teams.map(t => homeGameDistribution[t.id] || 0);
+        for (const t of teams.filter(t=>!dates.some(d=>availability[t.id]?.[d.id]&&homeAvailability[t.id]?.[d.id]))) softDevs.push(`${t.name}: Keine Heimspielmöglichkeiten an den ausgewählten Saisonterminen. Die Suche berücksichtigt das; für eine gleichmäßigere Verteilung bitte Heimspieltermine abstimmen.`);
+        for (const t of teams.filter(t=>!homeGameDistribution[t.id]&&dates.some(d=>availability[t.id]?.[d.id]&&homeAvailability[t.id]?.[d.id]))) softDevs.push(`${t.name}: Trotz eingetragener Heimspielmöglichkeiten kein Heimspieltag in diesem Plan. Verfügbarkeit der anderen Teams und Gastgeberkapazität prüfen oder weitere H-Termine anbieten.`);
         if (Math.max(...homeCounts) - Math.min(...homeCounts) > 1) softDevs.push(`Heimspieltage sind noch ungleich verteilt (${Math.min(...homeCounts)} bis ${Math.max(...homeCounts)}). Prüfe auch die Heimspielverteilung der anderen gefundenen Pläne und die eingetragenen Heimspielmöglichkeiten.`);
         if (allTeamsOnFinalDay) softDevs.push(`Gemeinsamer Saisonabschluss am ${formatDate(dates[dates.length - 1].value)}: Jedes Team spielt genau einmal. ${ignoredLateDates} spätere ausgewählte Termine werden ignoriert.`);
         teams.forEach(t => {
@@ -251,7 +245,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         if (maxTeamMatches >= 3) softDevs.push(`Einige Teams spielen ${maxTeamMatches} Spiele an einem einzigen Tag.`);
         if (searchStopped) softDevs.push(`Der Suchraum war zu groß. Es wird die beste innerhalb der Sicherheitslimits gefundene Lösung angezeigt.`);
         softDevs.push(`Optimierung: Zuerst gleichmäßig verteilte Heimspieltage, danach möglichst wenige Spieltage und wenige Anreisetage pro Team. Eine globale Bestlösung wird nicht garantiert.`);
-        softDevs.push(`Reguläre Spieltage: mindestens zwei Spiele; der Gastgeber spielt mit. Teams mit mehr als 100 km ${input.distanceMode === 'road' ? 'Straßenentfernung' : 'Luftlinie'} zum Gastgeber spielen mindestens zweimal. Der gemeinsame Saisonabschluss ist von diesen Mindestzahlen ausgenommen.`);
+        softDevs.push(`Reguläre Spieltage: mindestens zwei Spiele; der Gastgeber spielt mit. Teams mit mehr als 100 km ${input.manualDistances ? 'eingetragener Entfernung (sonst Luftlinie)' : input.distanceMode === 'road' ? 'Straßenentfernung' : 'Luftlinie'} zum Gastgeber spielen mindestens zweimal. Der gemeinsame Saisonabschluss ist von diesen Mindestzahlen ausgenommen.`);
         softDevs.push(`Optimierung: Die Suche bevorzugt eine gleichmäßige Verteilung der Heimspieltage.`);
 
         return {
@@ -332,15 +326,9 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
           const matchSignature = Object.entries(current).sort(([a], [b]) => a.localeCompare(b)).map(([id, day]) => `${id}:${day.matches.map(m => [m.teamA, m.teamB].sort().join('/')).sort().join(',')}`).join('|');
           if (seenMatchPlans.has(matchSignature)) return;
           seenMatchPlans.add(matchSignature);
-          let balanced = balanceHosts(current, input);
+          const balanced = balanceHosts(current, input);
           if (!balanced) return;
-          let homeCounts = teams.map(t => Object.values(balanced).filter(day => day.hostId === t.id).length);
-          // Retry with a strict cap before rejecting a zero-versus-four assignment.
-          if (!input.allowUnevenHomeDays && Math.min(...homeCounts) === 0 && Math.max(...homeCounts) >= 4) {
-            balanced = balanceHosts(current, input, 3);
-            if (!balanced) return;
-            homeCounts = teams.map(t => Object.values(balanced).filter(day => day.hostId === t.id).length);
-          }
+          const homeCounts = teams.map(t => Object.values(balanced).filter(day => day.hostId === t.id).length);
           const signature = scheduleSignature(balanced);
           foundSignatures.add(signature);
           if (seenPlans.has(signature)) return;
@@ -445,7 +433,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
       } else if (options.knownSignatures?.length && foundSignatures.size) {
         setError('Keine zusätzlichen Alternativen in diesem Suchlauf gefunden. Gespeicherte Pläne bleiben erhalten.');
       } else {
-        setError(searchStopped ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Versuche „Gründlich suchen“ oder exportiere die Eingaben zur Prüfung. Das beweist nicht, dass die Planung unmöglich ist." : `Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss, Drei-Spiele-Tage und die Verteilung der Heimspielmöglichkeiten. ${input.allowUnevenHomeDays ? "Eine ungleiche Heimspielverteilung ist erlaubt." : "Eine Verteilung mit null Heimspieltagen bei einem Team und vier oder mehr bei einem anderen wird ausgeschlossen."}`);
+        setError(searchStopped ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Versuche „Gründlich suchen“ oder exportiere die Eingaben zur Prüfung. Das beweist nicht, dass die Planung unmöglich ist." : `Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss, Drei-Spiele-Tage und die Verteilung der Heimspielmöglichkeiten. Eine ungleiche Heimspielverteilung ist kein Ausschlussgrund.`);
       }
 
   }

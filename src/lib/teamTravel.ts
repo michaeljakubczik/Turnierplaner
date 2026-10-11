@@ -28,9 +28,15 @@ export async function findHomePlaces(query: string, signal: AbortSignal): Promis
 }
 
 export type RoadDistances = { placesKey: string; km: Record<string, Record<string, number>> };
-export type TravelInput = { distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; teams: { id: string; homePlace?: HomePlace }[] };
+export type ManualDistances = Record<string,{placesKey:string;km:number}>;
+export const travelPairKey = (a: {id:string},b:{id:string}) => JSON.stringify([a.id,b.id].sort());
+export const travelPairPlacesKey = (a: {id:string;homePlace?:HomePlace},b:{id:string;homePlace?:HomePlace}) => JSON.stringify([a,b].sort((x,y)=>x.id.localeCompare(y.id)).map(t=>[t.id,t.homePlace?.latitude,t.homePlace?.longitude]));
+export const manualKm = (a: TravelInput['teams'][number],b:TravelInput['teams'][number],input:TravelInput) => {const entry=input.manualDistances?.[travelPairKey(a,b)];return entry&&entry.placesKey===travelPairPlacesKey(a,b)?entry.km:null;};
+export type TravelInput = { manualDistances?:ManualDistances; distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; teams: { id: string; homePlace?: HomePlace }[] };
 export const roadPlacesKey = (teams: TravelInput['teams']) => JSON.stringify(teams.map(t=>[t.id,t.homePlace?.longitude,t.homePlace?.latitude]));
 export function journeyKm(from: TravelInput['teams'][number], to: TravelInput['teams'][number], input: TravelInput): number | null {
+  if(from.id===to.id)return 0;
+  const manual=manualKm(from,to,input);if(manual!==null)return manual;
   if(input.distanceMode==='road')return input.roadDistances?.placesKey===roadPlacesKey(input.teams) ? input.roadDistances.km[from.id]?.[to.id] ?? null : null;
   return from.homePlace&&to.homePlace?distanceKm(from.homePlace,to.homePlace):null;
 }
