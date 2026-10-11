@@ -1,3 +1,4 @@
+import { comparePlans, scheduleSignature } from './seasonProject';
 import { analyzeSeason, type PlanningTip } from './planningDiagnostics';
 import { orderDayMatches, matchOrdinals } from './orderDayMatches';
 import { balanceHosts } from './balanceHosts';
@@ -50,8 +51,8 @@ export type SeasonInput = {
 };
 export type SearchProgress = { iterations: number; attempts: number; elapsedMs: number; bestDays: number | null; alternativesFound?: number };
 export type PlanAlternative = { schedule: Schedule; report: ValidationReport };
-export type SolverResult = { tips: PlanningTip[]; alternatives: PlanAlternative[]; error: string | null; schedule: Schedule | null; report: ValidationReport | null; searchStopped: boolean };
-export type SearchOptions = { durationMs: number; seed?: number };
+export type SolverResult = { foundSignatures?: string[]; tips: PlanningTip[]; alternatives: PlanAlternative[]; error: string | null; schedule: Schedule | null; report: ValidationReport | null; searchStopped: boolean };
+export type SearchOptions = { durationMs: number; seed?: number; continueSearch?: boolean; knownSignatures?: string[] };
 const formatDate = (dateStr: string) => {
   try {
     const date = new Date(dateStr);
@@ -136,7 +137,8 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
 
       let bestSchedule: Schedule | null = null;
       const candidates: { schedule: Schedule; score: number; spread: number; days: number; signature: string }[] = [];
-      const seenPlans = new Set<string>();
+      const seenPlans = new Set<string>(options.knownSignatures || []);
+      const foundSignatures = new Set<string>();
       const seenMatchPlans = new Set<string>();
       const MAX_ALTERNATIVES = 12;
       let bestDayCount = Infinity;
@@ -213,11 +215,11 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
       const searchLimitReached = () => {
         const now = performance.now();
         if (now - lastProgressAt > 200) {
-          onProgress({ iterations, attempts, elapsedMs: now - startedAt, bestDays: Number.isFinite(bestDayCount) ? bestDayCount : null, alternativesFound: candidates.length });
+          onProgress({ iterations, attempts, elapsedMs: now - startedAt, bestDays: Number.isFinite(bestDayCount) ? bestDayCount : null, alternativesFound: foundSignatures.size });
           lastProgressAt = now;
         }
         if (iterations > MAX_ITERATIONS || now - startedAt > durationMs) { searchStopped = true; return true; }
-        if (firstSolutionAt !== null && now - firstSolutionAt > 1500) return true;
+        if (!options.continueSearch && firstSolutionAt !== null && now - firstSolutionAt > 1500) return true;
         if (now - attemptStartedAt > 1000 || iterations - attemptStartIteration > 20000) { attemptStopped = true; return true; }
         return false;
       };
@@ -285,11 +287,13 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
             if (!balanced) return;
             homeCounts = teams.map(t => Object.values(balanced).filter(day => day.hostId === t.id).length);
           }
-          const signature = Object.entries(balanced).sort(([a], [b]) => a.localeCompare(b)).map(([id, day]) => `${id}:${day.hostId}:${day.matches.map(m => [m.teamA, m.teamB].sort().join('/')).sort().join(',')}`).join('|');
+          const signature = scheduleSignature(balanced);
+          foundSignatures.add(signature);
           if (seenPlans.has(signature)) return;
           seenPlans.add(signature);
-          candidates.push({ schedule: JSON.parse(JSON.stringify(balanced)), score: getScore(balanced), spread: Math.max(...homeCounts) - Math.min(...homeCounts), days: Object.keys(balanced).length, signature });
-          candidates.sort((a, b) => a.spread - b.spread || a.days - b.days || a.score - b.score || a.signature.localeCompare(b.signature));
+          const ordered = Object.fromEntries(Object.entries(balanced).map(([id, day]) => [id, {...day, matches: orderDayMatches(day.matches)}]));
+          candidates.push({ schedule: ordered, score: getScore(ordered), spread: Math.max(...homeCounts) - Math.min(...homeCounts), days: Object.keys(ordered).length, signature });
+          candidates.sort((a,b) => comparePlans({schedule:a.schedule,report:null!}, {schedule:b.schedule,report:null!}, teams));
           if (candidates.length > MAX_ALTERNATIVES) candidates.pop();
           bestSchedule = candidates[0].schedule; bestDayCount = candidates[0].days;
           if (firstSolutionAt === null) firstSolutionAt = performance.now();
@@ -370,10 +374,10 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         backtrack(attempts === 1 ? allMatches : shuffled(allMatches), {});
         // A fully explored attempt already covers all possibilities.
         if (!attemptStopped) break;
-      } while (!searchStopped && performance.now() - startedAt < durationMs && (firstSolutionAt === null || performance.now() - firstSolutionAt < 1500));
+      } while (!searchStopped && performance.now() - startedAt < durationMs && (options.continueSearch || firstSolutionAt === null || performance.now() - firstSolutionAt < 1500));
       searchStopped = searchStopped || performance.now() - startedAt >= durationMs;
       result.searchStopped = searchStopped;
-      onProgress({ iterations, attempts, elapsedMs: performance.now() - startedAt, bestDays: Number.isFinite(bestDayCount) ? bestDayCount : null, alternativesFound: candidates.length });
+      onProgress({ iterations, attempts, elapsedMs: performance.now() - startedAt, bestDays: Number.isFinite(bestDayCount) ? bestDayCount : null, alternativesFound: foundSignatures.size });
 
       const makeReport = (plan: Schedule): ValidationReport => {
         const counts = dates.map(d => plan[d.id]?.matches.length || 0).filter(count => count > 0);
@@ -424,6 +428,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
           softConstraintDeviations: softDevs
         };
       };
+      result.foundSignatures = [...foundSignatures];
       if (bestSchedule) {
         result.alternatives = candidates.map(candidate => {
           const schedule = Object.fromEntries(Object.entries(candidate.schedule).map(([id, day]) => [id, { ...day, matches: orderDayMatches(day.matches) }]));
@@ -431,6 +436,8 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         });
         setSchedule(result.alternatives[0].schedule);
         setReport(result.alternatives[0].report);
+      } else if (options.knownSignatures?.length && foundSignatures.size) {
+        setError('Keine zusätzlichen Alternativen in diesem Suchlauf gefunden. Gespeicherte Pläne bleiben erhalten.');
       } else {
         setError(searchStopped ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Versuche „Gründlich suchen“ oder exportiere die Eingaben zur Prüfung. Das beweist nicht, dass die Planung unmöglich ist." : "Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss, Drei-Spiele-Tage und die Verteilung der Heimspielmöglichkeiten. Eine Verteilung mit null Heimspieltagen bei einem Team und vier oder mehr bei einem anderen wird ausgeschlossen.");
       }

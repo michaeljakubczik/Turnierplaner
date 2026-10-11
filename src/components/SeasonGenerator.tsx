@@ -23,24 +23,11 @@ import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { calendarPeriods, periodMarks, hasVacationData, regionNames, type Region } from '../lib/seasonCalendar';
 import { distanceKm, findHomePlaces, type HomePlace } from '../lib/teamTravel';
-import { usePersistentState } from '../hooks/usePersistentState';
+import { comparePlans, draftKey, emptyProject, mergePlans, parseProject, scheduleSignature, type SeasonDraft, type SeasonProject } from '../lib/seasonProject';
 
 import type { Team, MatchMode, DateEntry, Availability, HomeAvailability, Schedule, ValidationReport, SearchProgress, SeasonInput, SolverResult, PlanAlternative } from '../lib/seasonSolver';
 
 // --- Types ---
-
-type SeasonDraft = {
-  seasonYear?: number;
-  allTeamsOnFinalDay?: boolean;
-  maxTripleDaysPerTeam?: number;
-  teams: Team[];
-  dates: DateEntry[];
-  availability: Availability;
-  homeAvailability: HomeAvailability;
-  matchMode: MatchMode;
-  maxMatchesPerDay: number;
-  maxMatchesPerTeamPerDay: number;
-};
 
 const formatDate = (dateStr: string) => {
   try {
@@ -83,10 +70,58 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     maxMatchesPerTeamPerDay: 2
   };
 
-  const [draft, setDraft, resetDraft, isSaving] = usePersistentState<SeasonDraft>(
-    'matchmaster_season_draft_v2',
-    initialDraft
-  );
+  const storageBlocked = useRef(false);
+  const [project, setProject] = useState<SeasonProject>(() => {
+    try {
+      const stored = localStorage.getItem('turnierplaner_project_v1');
+      if (stored) return parseProject(JSON.parse(stored));
+      const legacy = localStorage.getItem('matchmaster_season_draft_v2');
+      if (legacy) { const saved = JSON.parse(legacy); if (saved._schemaVersion === 1) return parseProject(emptyProject(saved.data)); }
+    } catch { storageBlocked.current = true; }
+    return emptyProject(initialDraft);
+  });
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const [projectNotice, setProjectNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (storageBlocked.current) { setStorageError('Der gespeicherte Browserstand konnte nicht gelesen werden und wurde nicht überschrieben. Bitte eine Projektdatei laden oder den neuen Stand als Datei sichern.'); return; }
+    try { localStorage.setItem('turnierplaner_project_v1', JSON.stringify(project)); setStorageError(null); }
+    catch { setStorageError('Automatisches Speichern im Browser fehlgeschlagen. Bitte das Projekt herunterladen, um deinen Stand zu sichern.'); }
+  }, [project]);
+  const draft = project.draft;
+  const setDraft = (update: SeasonDraft | ((previous: SeasonDraft) => SeasonDraft)) => setProject(prev => ({...prev, draft: typeof update === 'function' ? update(prev.draft) : update}));
+  const isSaving = false;
+  const [planView, setPlanView] = useState<'best' | 'favorites' | 'all'>(project.selectedId ? 'all' : 'best');
+  const currentKey = draftKey(draft);
+  const currentPlans = project.plans.filter(p => draftKey(p.draft) === currentKey).sort((a,b)=>comparePlans(a,b,draft.teams));
+  const alternatives = planView === 'favorites' ? project.plans.filter(p=>p.favorite) : planView === 'all' ? [...currentPlans, ...project.plans.filter(p=>draftKey(p.draft)!==currentKey)] : currentPlans.slice(0,12);
+  const selected = alternatives.find(p=>p.id===project.selectedId) || alternatives[0];
+  const selectedPlan = selected ? alternatives.indexOf(selected) : 0;
+  const schedule = selected?.schedule ?? null;
+  const report = selected?.report ?? null;
+  const resultTeams = selected?.draft.teams ?? draft.teams;
+  const resultDates = [...(selected?.draft.dates ?? draft.dates)].sort((a,b)=>a.value.localeCompare(b.value));
+  const isOldPlan = !!selected && draftKey(selected.draft) !== currentKey;
+  const selectPlan = (index: number) => setProject(prev=>({...prev, selectedId: alternatives[index].id}));
+  const inputFile = useRef<HTMLInputElement>(null);
+  const saveProject = () => {
+    const snapshot = {...project, selectedId: selected?.id ?? null};
+    const url = URL.createObjectURL(new Blob([JSON.stringify(snapshot,null,2)], {type:'application/json'}));
+    const link = document.createElement('a'); link.href=url; link.download='turnierplaner-projekt.json'; link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+  const loadProject = async (file?: File) => {
+    if (!file) return;
+    try {
+      if (file.size > 25 * 1024 * 1024) throw new Error('Projektdatei zu groß (maximal 25 MB).');
+      const loaded = parseProject(JSON.parse(await file.text()));
+      (Object.values(placeRequests.current) as AbortController[]).forEach(r=>r.abort());
+      storageBlocked.current = false;
+      setProject(loaded); setPlanView('all'); setCalendarTeamId(''); setAvailabilityUndo(null);
+      setPlaceChoices({}); setPlaceMessages({}); setError(null); setTips([]);
+      setProjectNotice('Projekt geladen. Eingaben, Spielpläne und Favoriten wurden wiederhergestellt.');
+    } catch (e) { setProjectNotice(e instanceof Error ? e.message : 'Projektdatei konnte nicht geladen werden.'); }
+    finally { if(inputFile.current) inputFile.current.value=''; }
+  };
 
   const [placeChoices, setPlaceChoices] = useState<Record<string, HomePlace[]>>({});
   const [placeMessages, setPlaceMessages] = useState<Record<string, string>>({});
@@ -126,9 +161,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const handleReset = () => {
     (Object.values(placeRequests.current) as AbortController[]).forEach(request => request.abort());
     setPlaceChoices({}); setPlaceMessages({});
-    resetDraft();
-    setSchedule(null);
-    setReport(null);
+    setDraft(initialDraft);
+    setProjectNotice('Eingaben zurückgesetzt. Gespeicherte Pläne und Favoriten findest du unter „Alle gespeicherten“.');
     setError(null);
   };
 
@@ -143,7 +177,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
   const seasonYear = draft.seasonYear ?? (Number(dates[0]?.value.slice(0, 4)) || new Date().getFullYear());
   const [calendarTeamId, setCalendarTeamId] = useState('');
-  const [holidayRegions, setHolidayRegions] = useState<Region[]>([]);
+  const holidayRegions = project.holidayRegions as Region[];
+  const setHolidayRegions = (update: Region[] | ((previous: Region[]) => Region[])) => setProject(prev=>({...prev,holidayRegions:typeof update === 'function' ? update(prev.holidayRegions as Region[]) : update}));
   const [availabilityUndo, setAvailabilityUndo] = useState<{ available: Availability; home: HomeAvailability; clearedAvailable: Availability; clearedHome: HomeAvailability } | null>(null);
   const hasAvailabilityEntries = Object.values(availability).some(days => Object.values(days).some(Boolean)) || Object.values(homeAvailability).some(days => Object.values(days).some(Boolean));
   const clearAvailability = () => {
@@ -189,15 +224,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   };
 
   const [isGenerating, setIsGenerating] = useState(false);
-  const [schedule, setSchedule] = useState<Schedule | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tips, setTips] = useState<PlanningTip[]>([]);
-  const [report, setReport] = useState<ValidationReport | null>(null);
-  const [alternatives, setAlternatives] = useState<PlanAlternative[]>([]);
-  const [selectedPlan, setSelectedPlan] = useState(0);
-  const selectPlan = (index: number) => { setSelectedPlan(index); setSchedule(alternatives[index].schedule); setReport(alternatives[index].report); };
-
-  useEffect(() => { setSchedule(null); setReport(null); setError(null); setAlternatives([]); setSelectedPlan(0); setTips([]); }, [draft]);
+  useEffect(() => { setError(null); setTips([]); }, [draft]);
 
   const addTeam = () => {
     const newId = Math.random().toString(36).substr(2, 9);
@@ -332,11 +361,11 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     workerRef.current?.terminate(); workerRef.current = null;
     setIsGenerating(false);
     setTips([]);
-    setError('Suche abgebrochen. Deine Eingaben bleiben gespeichert.');
+    setError('Suche abgebrochen. Bisher gespeicherte Pläne, Favoriten und Eingaben bleiben erhalten.');
   };
-  const solve = (thorough = false) => {
+  const solve = (thorough = false, continueSearch = false) => {
     workerRef.current?.terminate();
-    setIsGenerating(true); setError(null); setSchedule(null); setReport(null); setAlternatives([]); setSelectedPlan(0); setTips([]);
+    setIsGenerating(true); setError(null); setTips([]);
     setSearchProgress({ iterations: 0, attempts: 0, elapsedMs: 0, bestDays: null });
     const durationMs = thorough ? 120000 : 30000;
     setSearchDuration(durationMs);
@@ -347,8 +376,14 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       worker.onmessage = (event: MessageEvent<{ type: 'progress'; progress: SearchProgress } | { type: 'result'; result: SolverResult }>) => {
         if (workerRef.current !== worker) return;
         if (event.data.type === 'progress') { setSearchProgress(event.data.progress); return; }
-        setAlternatives(event.data.result.alternatives); setSelectedPlan(0);
-        setSchedule(event.data.result.schedule); setReport(event.data.result.report); setError(event.data.result.error); setTips(event.data.result.tips || []);
+        const result = event.data.result;
+        setProject(prev => {
+          const plans = mergePlans(prev.plans, result.alternatives, draft);
+          const known = new Set([...(prev.seen[currentKey] || []), ...(result.foundSignatures || result.alternatives.map(p=>scheduleSignature(p.schedule)))]);
+          const added = plans.filter(p=>draftKey(p.draft)===currentKey).sort((a,b)=>comparePlans(a,b,draft.teams));
+          return {...prev, plans, seen: {...prev.seen,[currentKey]:[...known]}, selectedId: prev.plans.some(p=>p.id===prev.selectedId&&draftKey(p.draft)===currentKey) ? prev.selectedId : added[0]?.id ?? prev.selectedId};
+        });
+        setPlanView('best'); setError(result.alternatives.length ? null : currentPlans.length ? 'Keine zusätzlichen Pläne in diesem Suchlauf gefunden. Gespeicherte Pläne bleiben erhalten.' : result.error); setTips(currentPlans.length ? [] : result.tips || []);
         setIsGenerating(false); worker.terminate(); workerRef.current = null;
       };
       worker.onerror = () => {
@@ -356,7 +391,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         setError('Die Planung konnte nicht gestartet werden. Lade die Seite neu; deine Eingaben bleiben gespeichert.');
         setIsGenerating(false); worker.terminate(); workerRef.current = null;
       };
-      worker.postMessage({ input, options: { durationMs } });
+      worker.postMessage({ input, options: { durationMs, continueSearch, knownSignatures: currentPlans.map(p=>scheduleSignature(p.schedule)) } });
     } catch {
       setError('Die Planung konnte nicht gestartet werden. Lade die Seite neu; deine Eingaben bleiben gespeichert.');
       setIsGenerating(false);
@@ -369,12 +404,12 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
-  const getTeamName = (id: string) => teams.find(t => t.id === id)?.name || id;
+  const getTeamName = (id: string) => resultTeams.find(t => t.id === id)?.name || id;
 
   const downloadExcel = () => {
     if (!schedule) return;
 
-    const data = seasonDates.flatMap(dateEntry => {
+    const data = resultDates.flatMap(dateEntry => {
       const day = schedule[dateEntry.id];
       if (!day) return [];
       return day.matches.map((match, index) => ({
@@ -403,6 +438,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
   return (
     <div className="min-h-screen bg-[#1C1F2A] text-white font-sans selection:bg-blue-500 selection:text-white">
+      {storageError && <p role="alert" className="bg-amber-500/20 p-3 text-sm">{storageError}</p>}
+      {projectNotice && <p role="status" className="bg-blue-500/10 p-3 text-sm">{projectNotice}</p>}
       <header className="border-b border-white/10 p-4 sm:p-6 lg:p-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-black/20 backdrop-blur-md sticky top-0 z-50">
         <div className="flex items-center gap-3 sm:gap-4 w-full sm:w-auto">
           <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition-colors">
@@ -429,6 +466,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               </motion.div>
             )}
           </AnimatePresence>
+          <button onClick={saveProject} className="rounded-full bg-blue-500/20 px-4 py-2 text-xs font-bold">Projekt speichern</button>
+          <button disabled={isGenerating} onClick={()=>inputFile.current?.click()} className="rounded-full bg-white/10 px-4 py-2 text-xs font-bold disabled:opacity-40">Projekt laden</button>
+          <input ref={inputFile} type="file" accept=".json,application/json" aria-label="Projektdatei laden" className="hidden" onChange={e=>loadProject(e.target.files?.[0])} />
           <button 
             onClick={handleReset}
             disabled={isGenerating}
@@ -618,6 +658,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
         {/* Results Section */}
         <div className="space-y-10">
+          {project.plans.length > 0 && <div className="flex flex-wrap gap-2"><button onClick={()=>setPlanView('best')} className="rounded bg-white/10 px-3 py-2 text-sm">Beste zwölf</button><button onClick={()=>setPlanView('favorites')} className="rounded bg-white/10 px-3 py-2 text-sm">★ Favoriten ({project.plans.filter(p=>p.favorite).length})</button><button onClick={()=>setPlanView('all')} className="rounded bg-white/10 px-3 py-2 text-sm">Alle gespeicherten ({project.plans.length})</button></div>}
           <section className="space-y-6">
             <AnimatePresence mode="wait">
               {error && (
@@ -632,18 +673,25 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               {schedule && report && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
                   <div className="glass-card rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-                    <div><p className="font-bold">{alternatives.length} {alternatives.length === 1 ? 'Spielplan' : 'alternative Spielpläne'} zur Auswahl</p><p className="text-xs text-gray-400">Bis zu 12 unterschiedliche Pläne, nach Heimspielverteilung und Spieltagen sortiert.</p></div>
+                    <div><p className="text-xs text-gray-400">{(project.seen[currentKey] || []).length} unterschiedliche Pläne für aktuelle Eingaben gefunden · {project.plans.length} Pläne gespeichert</p><p className="font-bold">{alternatives.length} {alternatives.length === 1 ? 'Spielplan' : 'alternative Spielpläne'} zur Auswahl</p><p className="text-xs text-gray-400">Rangfolge: Heimspielverteilung → wenige Spieltage → gleiche Tages-Spielnummern → Anreisetage und Auslastung.</p></div>
                     <div className="flex items-center gap-3">
                       <button aria-label="Vorheriger Spielplan" disabled={selectedPlan === 0} onClick={() => selectPlan(selectedPlan - 1)} className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-30">←</button>
                       <span aria-live="polite">Plan {selectedPlan + 1} / {alternatives.length}</span>
                       <button aria-label="Nächster Spielplan" disabled={selectedPlan >= alternatives.length - 1} onClick={() => selectPlan(selectedPlan + 1)} className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-30">→</button>
                     </div>
-                    <div className="w-full flex flex-wrap gap-2">{teams.map(t => <span key={t.id} className="text-xs rounded bg-white/5 px-2 py-1">{t.name}: {report.homeGameDistribution[t.id] || 0} Heimspieltage</span>)}</div>
+                    <div className="w-full flex flex-wrap gap-2">
+                      <select aria-label="Gespeicherte Spielpläne anzeigen" value={planView} onChange={e=>setPlanView(e.target.value as typeof planView)} className="bg-[#252938] rounded px-3 py-2 text-sm"><option value="best">Beste zwölf (aktuelle Eingaben)</option><option value="favorites">Favoriten</option><option value="all">Alle gespeicherten</option></select>
+                      <button aria-pressed={selected?.favorite} onClick={()=>setProject(prev=>({...prev,plans:prev.plans.map(p=>p.id===selected?.id?{...p,favorite:!p.favorite}:p)}))} className="rounded bg-white/10 px-3 py-2 text-sm">{selected?.favorite ? '★ Gemerkt' : '☆ Spielplan merken'}</button>
+                      <button disabled={isGenerating} onClick={()=>solve(false,true)} className="rounded bg-blue-500/20 px-3 py-2 text-sm disabled:opacity-40">Weitersuchen (30 Sekunden)</button>
+                      {isOldPlan && <p className="w-full text-amber-300 text-sm">Zu früheren Einstellungen erstellt. Anzeige und Excel verwenden die damals gespeicherten Eingaben.</p>}
+                      <p className="w-full text-xs text-gray-400">Eine vollständige Suche oder globale Bestlösung wird nicht garantiert. Alle gespeicherten Pläne bleiben erhalten.</p>
+                    </div>
+                    <div className="w-full flex flex-wrap gap-2">{resultTeams.map(t => <span key={t.id} className="text-xs rounded bg-white/5 px-2 py-1">{t.name}: {report.homeGameDistribution[t.id] || 0} Heimspieltage</span>)}</div>
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                     {[
                       { label: 'Spieltage', value: report.matchesPerDay.length },
-                      { label: 'Paarungen', value: (teams.length * (teams.length - 1)) / 2 },
+                      { label: 'Paarungen', value: (resultTeams.length * (resultTeams.length - 1)) / 2 },
                       { label: 'Gesamtspiele', value: report.matchesPerDay.reduce((a, b) => a + b, 0) },
                       { label: 'Ø Spiele/Tag', value: (report.matchesPerDay.reduce((a, b) => a + b, 0) / report.matchesPerDay.length).toFixed(1) },
                       { label: 'Max Last/Team', value: report.maxMatchesPerTeamPerDay },
@@ -667,7 +715,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                       </button>
                     </div>
                     <div className="space-y-6">
-                      {seasonDates.filter(dateEntry => schedule[dateEntry.id]?.matches.length).map((dateEntry) => (
+                      {resultDates.filter(dateEntry => schedule[dateEntry.id]?.matches.length).map((dateEntry) => (
                         <div key={dateEntry.id} className="relative pl-8 border-l border-white/10 pb-2">
                           <div className="absolute left-[-5px] top-0 w-[9px] h-[9px] rounded-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]" />
                           <div className="flex items-center justify-between mb-3">
@@ -683,9 +731,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                             </span>
                           </div>
                           <div className="flex flex-wrap gap-2 mb-3">
-                            {teams.filter(t => schedule[dateEntry.id].matches.some(m => m.teamA === t.id || m.teamB === t.id)).map(t => {
+                            {resultTeams.filter(t => schedule[dateEntry.id].matches.some(m => m.teamA === t.id || m.teamB === t.id)).map(t => {
                               const day = schedule[dateEntry.id];
-                              const host = teams.find(h => h.id === day.hostId)!;
+                              const host = resultTeams.find(h => h.id === day.hostId)!;
                               const km = distanceKm(t.homePlace!, host.homePlace!);
                               const count = day.matches.filter(m => m.teamA === t.id || m.teamB === t.id).length;
                               return <span key={t.id} className="text-xs text-gray-300 bg-white/5 rounded px-2 py-1">{t.name}: {count} {count === 1 ? 'Spiel' : 'Spiele'} · {t.id === host.id ? 'Gastgeber' : `${Math.round(km)} km Luftlinie${km > 100 ? ' (weite Anreise)' : ''}`}</span>;
@@ -737,7 +785,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                         <div className="pt-2 border-t border-white/5">
                           <p className="text-[10px] opacity-40 uppercase tracking-widest mb-2">Heimspiele pro Team</p>
                           <div className="grid grid-cols-2 gap-x-4 gap-y-1">
-                            {teams.map(t => (
+                            {resultTeams.map(t => (
                               <div key={t.id} className="flex justify-between text-[10px] font-mono">
                                 <span className="opacity-60 truncate mr-2">{t.name}</span>
                                 <span className="text-emerald-400">{report.homeGameDistribution[t.id] || 0}</span>
