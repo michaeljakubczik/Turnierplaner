@@ -1,3 +1,4 @@
+import { emptyPlanFilters, matchesPlanFilters, type PlanFilters } from '../lib/planFilters';
 import { seasonTravel } from '../lib/seasonTravel';
 import { teamDayCounts } from '../lib/seasonSpacing';
 import { weekendSlots } from '../lib/weekendCalendar';
@@ -94,12 +95,18 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const draft = project.draft;
   const setDraft = (update: SeasonDraft | ((previous: SeasonDraft) => SeasonDraft)) => setProject(prev => ({...prev, draft: typeof update === 'function' ? update(prev.draft) : update}));
   const isSaving = false;
+  const [planFilters,setPlanFilters]=useState<PlanFilters>(emptyPlanFilters);
+  const [filtersOpen,setFiltersOpen]=useState(false);
   const [highlightedTeams, setHighlightedTeams] = useState<string[]>([]);
   const [planView, setPlanView] = useState<'best' | 'favorites' | 'all'>(project.selectedId ? 'all' : 'best');
   const currentKey = draftKey(draft);
   const currentSeasonDates = seasonInput(draft).seasonDates;
   const currentPlans = project.plans.filter(p => draftKey(p.draft) === currentKey).sort((a,b)=>comparePlans(a,b,draft.teams,currentSeasonDates,draft));
-  const alternatives = planView === 'favorites' ? project.plans.filter(p=>p.favorite) : planView === 'all' ? [...currentPlans, ...project.plans.filter(p=>draftKey(p.draft)!==currentKey)] : currentPlans.slice(0,12);
+  const sourcePlans = planView === 'favorites' ? project.plans.filter(p=>p.favorite) : planView === 'all' ? [...currentPlans, ...project.plans.filter(p=>draftKey(p.draft)!==currentKey)] : currentPlans;
+  const filteredPlans=sourcePlans.filter(p=>matchesPlanFilters(p,planFilters));
+  const alternatives=planView==='best'?filteredPlans.slice(0,12):filteredPlans;
+  const filterTeams=Array.from(new Map<string,Team>(project.plans.flatMap(p=>p.draft.teams).map(t=>[t.id,t] as const)).values());
+  const hasPlanFilters=planFilters.maxTeamDays!==undefined||planFilters.maxKm!==undefined||planFilters.hostsTwoGames;
   const selected = alternatives.find(p=>p.id===project.selectedId) || alternatives[0];
   const selectedPlan = selected ? alternatives.indexOf(selected) : 0;
   const schedule = selected?.schedule ?? null;
@@ -634,7 +641,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="font-bold text-xl">Team-Verfügbarkeit</h2>
               <label>Jahr <select aria-label="Saisonjahr" value={seasonYear} onChange={e => setDraft(prev => ({ ...prev, seasonYear: Number(e.target.value), dates: [], availability: {}, homeAvailability: {} }))} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{Array.from({ length: 12 }, (_, i) => new Date().getFullYear() - 1 + i).concat(seasonYear).filter((v, i, a) => a.indexOf(v) === i).sort().map(y => <option key={y}>{y}</option>)}</select></label>
-              <label>Team <select aria-label="Kalenderteam" value={activeTeamId} onChange={e => setCalendarTeamId(e.target.value)} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+              <label>Team <select aria-label="Kalenderteam" value={activeTeamId} onChange={e => setCalendarTeamId(e.target.value)} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{teams.map(t => <option key={t.id} value={`team:${t.id}`}>{t.name}</option>)}</select></label>
               <span className="text-xs text-gray-400">{dates.length} mögliche Termine ausgewählt</span>
 
             </div>
@@ -711,6 +718,19 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         {/* Results Section */}
         <div className="space-y-10">
           {project.plans.length > 0 && <div className="flex flex-wrap gap-2"><button onClick={()=>setPlanView('best')} className="rounded bg-white/10 px-3 py-2 text-sm">Beste zwölf</button><button onClick={()=>setPlanView('favorites')} className="rounded bg-white/10 px-3 py-2 text-sm">★ Favoriten ({project.plans.filter(p=>p.favorite).length})</button><button onClick={()=>setPlanView('all')} className="rounded bg-white/10 px-3 py-2 text-sm">Alle gespeicherten ({project.plans.length})</button></div>}
+          {project.plans.length>0 && <div className="glass-card rounded-xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" aria-expanded={filtersOpen} aria-controls="saved-plan-filters" onClick={()=>setFiltersOpen(prev=>!prev)} className="rounded bg-white/10 px-3 py-2 text-sm">Spielpläne filtern{hasPlanFilters?' · aktiv':''}</button>
+              <span role="status" className="text-xs text-gray-400">{filteredPlans.length} von {sourcePlans.length} Plänen passen{planView==='best'&&filteredPlans.length>12?' · die besten zwölf werden angezeigt':''}</span>
+              {hasPlanFilters&&<button type="button" onClick={()=>setPlanFilters(emptyPlanFilters)} className="text-xs text-blue-300 underline">Filter zurücksetzen</button>}
+            </div>
+            {filtersOpen&&<div id="saved-plan-filters" className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm">
+              <label className="space-y-2"><span className="block">Max. Spieltage pro Team</span><input aria-label="Filter maximale Spieltage pro Team" type="number" min="1" max="1000" step="1" placeholder="Unbegrenzt" value={planFilters.maxTeamDays??''} onChange={e=>{const n=Number(e.target.value);if(e.target.value===''||Number.isInteger(n)&&n>=1&&n<=1000)setPlanFilters(prev=>({...prev,maxTeamDays:e.target.value===''?undefined:n}));}} className="w-full rounded bg-white/10 px-3 py-2"/><span className="block text-xs text-gray-400">Obergrenze für jedes Team; mehrere Spiele am selben Tag zählen einmal. Der Abschluss zählt mit.</span></label>
+              <div className="space-y-2"><label className="block">Fahrstrecke bis (km)<input aria-label="Filter maximale Fahrstrecke" type="number" min="0" step="1" placeholder="Unbegrenzt" value={planFilters.maxKm??''} onChange={e=>{const n=Number(e.target.value);if(e.target.value===''||Number.isFinite(n)&&n>=0)setPlanFilters(prev=>({...prev,maxKm:e.target.value===''?undefined:n}));}} className="mt-2 w-full rounded bg-white/10 px-3 py-2"/></label><select aria-label="Fahrstreckenfilter anwenden auf" value={planFilters.kmScope} onChange={e=>setPlanFilters(prev=>({...prev,kmScope:e.target.value}))} className="w-full rounded bg-[#252938] px-3 py-2"><option value="total">Alle Teams zusammen</option><option value="each">Jedes Team einzeln</option>{filterTeams.map(t=><option key={t.id} value={`team:${t.id}`}>{t.name}</option>)}</select><p className="text-xs text-gray-400">Hin- und Rückfahrt; eingetragene Wegstrecken, sonst Luftlinie. Bei aktivem Kilometerlimit werden Pläne mit fehlenden Entfernungen im gewählten Umfang ausgeblendet.</p></div>
+              <label className="flex items-start gap-2"><input type="checkbox" aria-label="Nur Gastgeber mit mindestens zwei Spielen" checked={planFilters.hostsTwoGames} onChange={e=>setPlanFilters(prev=>({...prev,hostsTwoGames:e.target.checked}))} className="mt-1"/><span>Gastgeber mit mindestens zwei Spielen<span className="block text-xs text-gray-400 mt-2">An jedem regulären Heimspieltag. Der gemeinsame Abschluss mit genau einem Spiel ist ausgenommen.</span></span></label>
+            </div>}
+            {filteredPlans.length===0&&<p className="text-sm text-amber-300">Keine passenden Spielpläne in dieser Ansicht. Filter lockern oder zurücksetzen, oder „Alle gespeicherten“ wählen. Alle Pläne bleiben gespeichert.</p>}
+          </div>}
           <section className="space-y-6">
             <AnimatePresence mode="wait">
               {error && (
@@ -868,7 +888,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 </motion.div>
               )}
 
-              {!schedule && !error && !isGenerating && (
+              {!schedule && !error && !isGenerating && project.plans.length===0 && (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="h-64 border-2 border-dashed border-white/10 rounded-3xl flex flex-col items-center justify-center text-center p-10 space-y-4">
                   <div className="w-12 h-12 bg-white/5 rounded-full flex items-center justify-center">
                     <Play size={24} className="opacity-20 ml-1" />
