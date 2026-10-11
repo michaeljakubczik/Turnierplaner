@@ -155,3 +155,18 @@ test('diagnostics identify missing shared dates and respect triple-day limits', 
   const spacious = analyzeSeason(fixture(4, 12));
   assert.equal(spacious.filter(t=>t.proven).length, 0);
 });
+
+test('same-day return games and uneven host exceptions are explicit and preserved',()=>{
+  const input=fixture(2,1,2);input.maxMatchesPerDay=2;input.maxMatchesPerTeamPerDay=2;input.allowRepeatPairPerDay=true;
+  const r=solveSeason(input,{durationMs:100});assert.ok(r.schedule,r.error||'');assert.equal(Object.values(r.schedule!)[0].matches.length,2);
+  const constrained=fixture(3,4,2);constrained.matchMode=4;constrained.maxMatchesPerDay=3;constrained.maxMatchesPerTeamPerDay=2;
+  constrained.teams.forEach(t=>constrained.homeAvailability[t.id]={});constrained.homeAvailability.t0=structuredClone(constrained.availability.t0);
+  assert.match(solveSeason(constrained,{durationMs:100}).error!,/Heimspielverteilung/);
+  constrained.allowUnevenHomeDays=true;assert.ok(solveSeason(constrained,{durationMs:300}).schedule);
+});
+test('finale-only plan does not require locations, and search publishes retained candidates before completion',()=>{
+  const input=fixture(2,1,1,true);input.teams.forEach(t=>delete t.homePlace);
+  assert.ok(solveSeason(input,{durationMs:100}).schedule);
+  let checkpoint=0;const result=solveSeason(fixture(4,5),{durationMs:100},p=>{if(p.checkpoint?.length)checkpoint=p.checkpoint.length;});
+  assert.ok(result.schedule);assert.ok(checkpoint>0);
+});

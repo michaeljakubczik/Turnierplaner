@@ -26,3 +26,22 @@ export async function findHomePlaces(query: string, signal: AbortSignal): Promis
   }
   return places;
 }
+
+export type RoadDistances = { placesKey: string; km: Record<string, Record<string, number>> };
+export type TravelInput = { distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; teams: { id: string; homePlace?: HomePlace }[] };
+export const roadPlacesKey = (teams: TravelInput['teams']) => JSON.stringify(teams.map(t=>[t.id,t.homePlace?.longitude,t.homePlace?.latitude]));
+export function journeyKm(from: TravelInput['teams'][number], to: TravelInput['teams'][number], input: TravelInput): number | null {
+  if(input.distanceMode==='road')return input.roadDistances?.placesKey===roadPlacesKey(input.teams) ? input.roadDistances.km[from.id]?.[to.id] ?? null : null;
+  return from.homePlace&&to.homePlace?distanceKm(from.homePlace,to.homePlace):null;
+}
+// Called only after the user explicitly chooses to send home-place coordinates to FOSSGIS.
+export async function fetchRoadDistances(teams: TravelInput['teams'], signal: AbortSignal): Promise<RoadDistances> {
+  if(teams.length>25)throw new Error('Straßenabfrage unterstützt höchstens 25 Teams. Für größere Projekte bitte Luftlinie verwenden.');
+  if(teams.some(t=>!t.homePlace))throw new Error('Bitte zuerst alle Heimspielorte bestätigen.');
+  const coordinates=teams.map(t=>`${t.homePlace!.longitude},${t.homePlace!.latitude}`).join(';');
+  const response=await fetch(`https://routing.openstreetmap.de/routed-car/table/v1/driving/${coordinates}?annotations=distance`,{signal});
+  if(!response.ok)throw new Error('Straßenentfernungen konnten nicht abgerufen werden. Bitte erneut versuchen oder Luftlinie auswählen.');
+  const data=await response.json();
+  if(data.code!=='Ok'||!Array.isArray(data.distances)||data.distances.length!==teams.length||data.distances.some((row:unknown)=>!Array.isArray(row)||row.length!==teams.length||row.some(n=>typeof n!=='number'||!Number.isFinite(n)||n<0)))throw new Error('Keine vollständigen Straßenentfernungen verfügbar. Bitte Luftlinie wählen oder Orte prüfen.');
+  return {placesKey:roadPlacesKey(teams),km:Object.fromEntries(teams.map((t,i)=>[t.id,Object.fromEntries(teams.map((other,j)=>[other.id,data.distances[i][j]/1000]))]))};
+}

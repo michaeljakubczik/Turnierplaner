@@ -22,7 +22,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { calendarPeriods, periodMarks, hasVacationData, regionNames, type Region } from '../lib/seasonCalendar';
-import { distanceKm, findHomePlaces, type HomePlace } from '../lib/teamTravel';
+import { journeyKm, roadPlacesKey, fetchRoadDistances, findHomePlaces, type HomePlace } from '../lib/teamTravel';
 import { comparePlans, draftKey, emptyProject, mergePlans, parseProject, scheduleSignature, type SeasonDraft, type SeasonProject } from '../lib/seasonProject';
 
 import type { Team, MatchMode, DateEntry, Availability, HomeAvailability, Schedule, ValidationReport, SearchProgress, SeasonInput, SolverResult, PlanAlternative } from '../lib/seasonSolver';
@@ -115,6 +115,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       if (file.size > 25 * 1024 * 1024) throw new Error('Projektdatei zu groß (maximal 25 MB).');
       const loaded = parseProject(JSON.parse(await file.text()));
       (Object.values(placeRequests.current) as AbortController[]).forEach(r=>r.abort());
+      roadRequest.current?.abort(); roadConsent.current=false; setIsRouting(false);
       storageBlocked.current = false;
       setProject(loaded); setPlanView('all'); setCalendarTeamId(''); setAvailabilityUndo(null);
       setPlaceChoices({}); setPlaceMessages({}); setError(null); setTips([]);
@@ -123,6 +124,24 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     finally { if(inputFile.current) inputFile.current.value=''; }
   };
 
+  const [roadStatus, setRoadStatus] = useState('');
+  const [isRouting, setIsRouting] = useState(false);
+  const roadRequest = useRef<AbortController | null>(null);
+  const lastRoadRequestAt = useRef(0);
+  const roadConsent = useRef(false);
+  const prepareRoadDistances = async () => {
+    if (Date.now()-lastRoadRequestAt.current < 1100) return;
+    lastRoadRequestAt.current=Date.now(); roadRequest.current?.abort();
+    const controller=new AbortController();roadRequest.current=controller;const key=roadPlacesKey(draft.teams);
+    setIsRouting(true);setRoadStatus('Straßenentfernungen werden abgerufen …');
+    try {const roadDistances=await fetchRoadDistances(draft.teams,controller.signal);if(controller.signal.aborted)return;
+      setDraft(prev=>roadPlacesKey(prev.teams)===key?{...prev,distanceMode:'road',roadDistances}:prev);setRoadStatus('Straßenentfernungen gespeichert. Neue bestätigte Orte werden in dieser Sitzung automatisch neu berechnet.');
+    } catch(e){if(!controller.signal.aborted)setRoadStatus(e instanceof Error?e.message:'Abfrage fehlgeschlagen.');}
+    finally {if(roadRequest.current===controller)setIsRouting(false);}
+  };
+  useEffect(()=>()=>roadRequest.current?.abort(),[]);
+  const currentRoadKey=roadPlacesKey(draft.teams);
+  useEffect(()=>{if(roadConsent.current&&draft.distanceMode==='road'&&draft.roadDistances?.placesKey!==currentRoadKey&&draft.teams.every(t=>t.homePlace)) {const timer=setTimeout(()=>prepareRoadDistances(),1100);return ()=>clearTimeout(timer);}},[currentRoadKey,draft.distanceMode]);
   const [placeChoices, setPlaceChoices] = useState<Record<string, HomePlace[]>>({});
   const [placeMessages, setPlaceMessages] = useState<Record<string, string>>({});
   const placeRequests = useRef<Record<string, AbortController>>({});
@@ -219,6 +238,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       const key = kind === 'home' ? 'homeAvailability' : 'availability';
       return { ...prev, dates: exists ? prev.dates : [...prev.dates, date],
         [key]: { ...prev[key], [activeTeamId]: { ...prev[key][activeTeamId], [date.id]: !prev[key][activeTeamId]?.[date.id] } },
+        ...(kind === 'available' && prev.availability[activeTeamId]?.[date.id] ? {homeAvailability: {...prev.homeAvailability, [activeTeamId]: {...prev.homeAvailability[activeTeamId], [date.id]: false}}} : {}),
         ...(kind === 'home' && !prev.homeAvailability[activeTeamId]?.[date.id] ? { availability: { ...prev.availability, [activeTeamId]: { ...prev.availability[activeTeamId], [date.id]: true } } } : {}) };
     });
   };
@@ -268,7 +288,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const updateTeamCapacity = (id: string, capacity: number) => {
     setDraft(prev => ({
       ...prev,
-      teams: prev.teams.map(t => t.id === id ? { ...t, maxCapacity: capacity } : t)
+      teams: prev.teams.map(t => t.id === id ? { ...t, maxCapacity: Number.isFinite(capacity) ? Math.max(2, Math.min(100, Math.trunc(capacity))) : t.maxCapacity } : t)
     }));
   };
 
@@ -323,7 +343,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           ...prev.availability[teamId],
           [dateId]: !prev.availability[teamId]?.[dateId]
         }
-      }
+      },
+      ...(prev.availability[teamId]?.[dateId] ? {homeAvailability:{...prev.homeAvailability,[teamId]:{...prev.homeAvailability[teamId],[dateId]:false}}} : {})
     }));
   };
 
@@ -369,13 +390,18 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     setSearchProgress({ iterations: 0, attempts: 0, elapsedMs: 0, bestDays: null });
     const durationMs = thorough ? 120000 : 30000;
     setSearchDuration(durationMs);
-    const input: SeasonInput = { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates };
+    const input: SeasonInput = { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates, allowRepeatPairPerDay: draft.allowRepeatPairPerDay, allowUnevenHomeDays: draft.allowUnevenHomeDays, distanceMode:draft.distanceMode, roadDistances:draft.roadDistances };
     try {
       const worker = new Worker(new URL('../lib/seasonSolver.worker.ts', import.meta.url), { type: 'module' });
       workerRef.current = worker;
       worker.onmessage = (event: MessageEvent<{ type: 'progress'; progress: SearchProgress } | { type: 'result'; result: SolverResult }>) => {
         if (workerRef.current !== worker) return;
-        if (event.data.type === 'progress') { setSearchProgress(event.data.progress); return; }
+        if (event.data.type === 'progress') {
+          setSearchProgress(event.data.progress);
+          const progress = event.data.progress;
+          if (progress.checkpoint) setProject(prev=>({...prev, plans:mergePlans(prev.plans,progress.checkpoint!,draft), seen:{...prev.seen,[currentKey]:[...new Set([...(prev.seen[currentKey]||[]),...(progress.foundSignatures||[])])]}}));
+          return;
+        }
         const result = event.data.result;
         setProject(prev => {
           const plans = mergePlans(prev.plans, result.alternatives, draft);
@@ -495,7 +521,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                   </button>
                 ))}
               </div>
-              <p className="text-xs text-gray-400">Die Planung bevorzugt eine gleichmäßige Verteilung der Heimspieltage. Null Heimspieltage bei einem Team und vier oder mehr bei einem anderen werden ausgeschlossen.</p>
+              <p className="text-xs text-gray-400">Die Planung bevorzugt eine gleichmäßige Verteilung der Heimspieltage. Die Ausnahme für null gegenüber vier oder mehr Heimspieltagen ist unten wählbar.</p>
             <p className="text-xs text-gray-400">Reguläre Spieltage: mindestens zwei Spiele, bevorzugt drei oder mehr. Der Planer bevorzugt möglichst wenige Spieltage.</p>
               <p className="text-[10px] opacity-50 font-mono uppercase">Jedes Team spielt {matchMode}-mal gegen jedes andere Team.</p>
             </div>
@@ -523,6 +549,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 </div>
                 <p className="text-[10px] opacity-50 font-mono uppercase">Maximale Anzahl an Spielen pro Team an einem Tag.</p>
               </div>
+            <div className="space-y-2 text-xs text-gray-300"><p>Entfernungsgrundlage: {draft.distanceMode==='road'?'Straßenentfernung':'Luftlinie (lokal)'}</p><button type="button" disabled={isRouting} onClick={()=>{roadConsent.current=true;prepareRoadDistances();}} className="rounded bg-white/10 px-3 py-2 disabled:opacity-40">Straßenkilometer berechnen und verwenden</button><button type="button" onClick={()=>{roadRequest.current?.abort();setIsRouting(false);setDraft(prev=>({...prev,distanceMode:'air'}));setRoadStatus('');}} className="ml-2 rounded bg-white/10 px-3 py-2">Luftlinie verwenden</button><p>Mit „Straßenkilometer berechnen“ werden die Koordinaten aller Heimspielorte an routing.openstreetmap.de (FOSSGIS) übermittelt. Ergebnisse bleiben im Projekt gespeichert. Nach bestätigten Ortsänderungen wird in dieser Sitzung automatisch neu berechnet; nach dem Laden eines Projekts bei Bedarf erneut abrufen.</p><p role="status">{roadStatus}</p><a href="https://routing.openstreetmap.de/about.html" target="_blank" rel="noreferrer" className="underline">Dienst & Datenschutz</a> · © OpenStreetMap-Mitwirkende · <a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noreferrer" className="underline">Karte korrigieren</a></div>
+            <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={draft.allowRepeatPairPerDay ?? false} onChange={e=>setDraft(prev=>({...prev,allowRepeatPairPerDay:e.target.checked}))} /><span>Rückspiele am selben Tag erlauben</span></label>
+            <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={draft.allowUnevenHomeDays ?? false} onChange={e=>setDraft(prev=>({...prev,allowUnevenHomeDays:e.target.checked}))} /><span>Ungleiche Heimspielverteilung als Ausnahme erlauben<br/><span className="text-xs text-gray-400">Auch 0 Heimspieltage bei einem Team und 4 oder mehr bei einem anderen. Gleichmäßigkeit bleibt ein Optimierungsziel.</span></span></label>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag: genau ein Spiel pro Team<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
             <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
               <input aria-label="Maximale Drei-Spiele-Tage" type="number" min="0" max="100" value={maxTripleDaysPerTeam} onChange={e => setDraft(prev => ({ ...prev, maxTripleDaysPerTeam: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))} className="ml-3 w-16 bg-white/10 rounded p-2" />
@@ -553,7 +582,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                       <input 
                         type="number" 
                         min="2" 
-                        max="10" 
+                        max="100" 
                         value={team.maxCapacity} 
                         onChange={(e) => updateTeamCapacity(team.id, parseInt(e.target.value))} 
                         className="w-10 bg-white/5 border border-white/10 rounded text-center text-xs py-0.5 focus:border-blue-500 outline-none"
@@ -575,7 +604,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             </div>
             <p className="text-[10px] opacity-50 font-mono uppercase pt-2 border-t border-white/5">
               MAX = Maximale Anzahl an Teams bei Heimspielen (Hallenkapazität).
-              <span className="block mt-2 normal-case font-sans">Ortssuche: Photon / © OpenStreetMap-Mitwirkende. Die Entfernungen werden lokal als Luftlinie berechnet. Über 100 km: mindestens zwei Spiele pro Gastteam; am gemeinsamen Saisonabschluss genau eines.</span>
+              <span className="block mt-2 normal-case font-sans">Ortssuche: Photon / © OpenStreetMap-Mitwirkende. Luftlinie wird lokal berechnet; Straßenkilometer können oben ausdrücklich abgerufen werden. Über 100 km nach gewählter Grundlage: mindestens zwei Spiele pro Gastteam; am gemeinsamen Saisonabschluss genau eines.</span>
             </p>
           </section>
 
@@ -734,9 +763,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                             {resultTeams.filter(t => schedule[dateEntry.id].matches.some(m => m.teamA === t.id || m.teamB === t.id)).map(t => {
                               const day = schedule[dateEntry.id];
                               const host = resultTeams.find(h => h.id === day.hostId)!;
-                              const km = distanceKm(t.homePlace!, host.homePlace!);
+                              const km = journeyKm(t,host,selected?.draft ?? draft);
                               const count = day.matches.filter(m => m.teamA === t.id || m.teamB === t.id).length;
-                              return <span key={t.id} className="text-xs text-gray-300 bg-white/5 rounded px-2 py-1">{t.name}: {count} {count === 1 ? 'Spiel' : 'Spiele'} · {t.id === host.id ? 'Gastgeber' : `${Math.round(km)} km Luftlinie${km > 100 ? ' (weite Anreise)' : ''}`}</span>;
+                              return <span key={t.id} className="text-xs text-gray-300 bg-white/5 rounded px-2 py-1">{t.name}: {count} {count === 1 ? 'Spiel' : 'Spiele'} · {t.id === host.id ? 'Gastgeber' : `${km === null ? 'Entfernung unbekannt' : Math.round(km) + (selected?.draft.distanceMode==='road'?' km Straße':' km Luftlinie')}${km !== null && km > 100 ? ' (weite Anreise)' : ''}`}</span>;
                             })}
                           </div>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">

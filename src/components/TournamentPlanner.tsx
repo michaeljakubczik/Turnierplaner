@@ -24,7 +24,8 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import autoTable from 'jspdf-autotable';
+import { makeTournament, scheduleTournament, resolveBracket, standingsFor, type TournamentMatch as Match, type TournamentGroup as Group, type StandingsEntry, type TournamentConfig } from '../lib/tournamentEngine';
 import { usePersistentState } from '../hooks/usePersistentState';
 
 // --- Types ---
@@ -38,40 +39,6 @@ type Team = {
 type TournamentFormat = 'ROUND_ROBIN' | 'GROUPS_FINAL' | 'GROUPS_SEMI_FINAL' | 'FULL_KO' | 'AUTO';
 
 type DurationMode = 'FIXED' | 'AUTO';
-
-type Match = {
-  id: string;
-  teamAId: string;
-  teamBId: string;
-  scoreA?: number;
-  scoreB?: number;
-  winnerId?: string;
-  isDraw?: boolean;
-  group?: string;
-  stage: 'GROUP' | 'SEMI' | 'FINAL' | 'THIRD_PLACE' | 'QUARTER' | 'KO';
-  time?: string;
-  field?: number;
-  day?: number;
-  placeholderA?: string; // e.g. "1st Group A"
-  placeholderB?: string;
-};
-
-type Group = {
-  name: string;
-  teamIds: string[];
-};
-
-type StandingsEntry = {
-  teamId: string;
-  games: number;
-  wins: number;
-  draws: number;
-  losses: number;
-  goalsFor: number;
-  goalsAgainst: number;
-  goalDiff: number;
-  points: number;
-};
 
 type TournamentDraft = {
   teams: Team[];
@@ -88,6 +55,7 @@ type TournamentDraft = {
   hasAwardCeremony: boolean;
   matches: Match[];
   groups: Group[];
+  qualifiers?: Record<string,string[]>;
   activeTab: 'SETUP' | 'SCHEDULE' | 'STANDINGS';
 };
 
@@ -152,10 +120,11 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
     hasAwardCeremony: true,
     matches: [],
     groups: [],
+    qualifiers: {},
     activeTab: 'SETUP'
   };
 
-  const [draft, setDraft, resetDraft, isSaving] = usePersistentState<TournamentDraft>(
+  const [draft, setDraft, resetDraft, isSaving, , storageError] = usePersistentState<TournamentDraft>(
     'matchmaster_tournament_draft_v1',
     initialDraft
   );
@@ -188,112 +157,53 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
 
   // --- Actions ---
 
-  const setTeams = (val: Team[] | ((p: Team[]) => Team[])) => setDraft(prev => ({ ...prev, teams: typeof val === 'function' ? val(prev.teams) : val }));
-  const setDurationMode = (val: DurationMode | ((p: DurationMode) => DurationMode)) => setDraft(prev => ({ ...prev, durationMode: typeof val === 'function' ? val(prev.durationMode) : val }));
-  const setNumDays = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, numDays: typeof val === 'function' ? val(prev.numDays) : val }));
-  const setStartTime = (val: string | ((p: string) => string)) => setDraft(prev => ({ ...prev, startTime: typeof val === 'function' ? val(prev.startTime) : val }));
-  const setEndTime = (val: string | ((p: string) => string)) => setDraft(prev => ({ ...prev, endTime: typeof val === 'function' ? val(prev.endTime) : val }));
-  const setMatchDuration = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, matchDuration: typeof val === 'function' ? val(prev.matchDuration) : val }));
-  const setBreakDuration = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, breakDuration: typeof val === 'function' ? val(prev.breakDuration) : val }));
-  const setNumFields = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, numFields: typeof val === 'function' ? val(prev.numFields) : val }));
-  const setFormat = (val: TournamentFormat | ((p: TournamentFormat) => TournamentFormat)) => setDraft(prev => ({ ...prev, format: typeof val === 'function' ? val(prev.format) : val }));
-  const setHasThirdPlace = (val: boolean | ((p: boolean) => boolean)) => setDraft(prev => ({ ...prev, hasThirdPlace: typeof val === 'function' ? val(prev.hasThirdPlace) : val }));
-  const setAwardCeremonyDuration = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, awardCeremonyDuration: typeof val === 'function' ? val(prev.awardCeremonyDuration) : val }));
-  const setHasAwardCeremony = (val: boolean | ((p: boolean) => boolean)) => setDraft(prev => ({ ...prev, hasAwardCeremony: typeof val === 'function' ? val(prev.hasAwardCeremony) : val }));
+  const setTeams = (val: Team[] | ((p: Team[]) => Team[])) => setDraft(prev => ({ ...prev, teams: typeof val === 'function' ? val(prev.teams) : val, matches:[],groups:[],qualifiers:{},activeTab:'SETUP' }));
+  const setDurationMode = (val: DurationMode | ((p: DurationMode) => DurationMode)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', durationMode: typeof val === 'function' ? val(prev.durationMode) : val }));
+  const setNumDays = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', numDays: typeof val === 'function' ? val(prev.numDays) : val }));
+  const setStartTime = (val: string | ((p: string) => string)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', startTime: typeof val === 'function' ? val(prev.startTime) : val }));
+  const setEndTime = (val: string | ((p: string) => string)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', endTime: typeof val === 'function' ? val(prev.endTime) : val }));
+  const setMatchDuration = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', matchDuration: typeof val === 'function' ? val(prev.matchDuration) : val }));
+  const setBreakDuration = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', breakDuration: typeof val === 'function' ? val(prev.breakDuration) : val }));
+  const setNumFields = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', numFields: typeof val === 'function' ? val(prev.numFields) : val }));
+  const setFormat = (val: TournamentFormat | ((p: TournamentFormat) => TournamentFormat)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', format: typeof val === 'function' ? val(prev.format) : val }));
+  const setHasThirdPlace = (val: boolean | ((p: boolean) => boolean)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', hasThirdPlace: typeof val === 'function' ? val(prev.hasThirdPlace) : val }));
+  const setAwardCeremonyDuration = (val: number | ((p: number) => number)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', awardCeremonyDuration: typeof val === 'function' ? val(prev.awardCeremonyDuration) : val }));
+  const setHasAwardCeremony = (val: boolean | ((p: boolean) => boolean)) => setDraft(prev => ({ ...prev, matches:[], groups:[], qualifiers:{}, activeTab:'SETUP', hasAwardCeremony: typeof val === 'function' ? val(prev.hasAwardCeremony) : val }));
   const setMatches = (val: Match[] | ((p: Match[]) => Match[])) => setDraft(prev => ({ ...prev, matches: typeof val === 'function' ? val(prev.matches) : val }));
   const setGroups = (val: Group[] | ((p: Group[]) => Group[])) => setDraft(prev => ({ ...prev, groups: typeof val === 'function' ? val(prev.groups) : val }));
   const setActiveTab = (val: ('SETUP' | 'SCHEDULE' | 'STANDINGS') | ((p: 'SETUP' | 'SCHEDULE' | 'STANDINGS') => 'SETUP' | 'SCHEDULE' | 'STANDINGS')) => setDraft(prev => ({ ...prev, activeTab: typeof val === 'function' ? val(prev.activeTab) : val }));
 
   const addTeam = () => {
-    const newId = `t${Date.now()}`;
+    const newId = crypto.randomUUID();
     const nextLetter = String.fromCharCode(65 + teams.length);
     setTeams([...teams, { id: newId, name: `Team ${nextLetter}` }]);
   };
 
   const removeTeam = (id: string) => {
-    if (teams.length <= 3) return;
+    if (teams.length <= 2) return;
     setTeams(teams.filter(t => t.id !== id));
   };
 
   const updateTeamName = (id: string, name: string) => {
-    setTeams(teams.map(t => t.id === id ? { ...t, name } : t));
+    setDraft(prev=>({...prev,teams:prev.teams.map(t=>t.id===id?{...t,name}:t)}));
   };
 
   const updateScore = (matchId: string, scoreA: number | undefined, scoreB: number | undefined) => {
-    setMatches(prev => {
-      const next = prev.map(m => {
-        if (m.id !== matchId) return m;
-        
-        let winnerId: string | undefined = undefined;
-        let isDraw = false;
-        
-        const sA = scoreA ?? 0;
-        const sB = scoreB ?? 0;
-
-        if (scoreA !== undefined && scoreB !== undefined) {
-          if (sA > sB) winnerId = m.teamAId;
-          else if (sB > sA) winnerId = m.teamBId;
-          else isDraw = true;
-        }
-
-        return { ...m, scoreA, scoreB, winnerId, isDraw };
-      });
-
-      // Update KO placeholders if necessary
-      return updateKoPlaceholders(next);
+    setDraft(prev => {
+      const editedGroup = prev.matches.find(m=>m.id===matchId)?.group;
+      const qualifiers = editedGroup ? {...prev.qualifiers,[editedGroup]:[]} : prev.qualifiers;
+      const updated=prev.matches.map(m=>m.id===matchId ? {...m,scoreA,scoreB,decidingWinnerId:undefined} : m);
+      return {...prev,qualifiers,matches:resolveBracket(updated,prev.teams,prev.groups,qualifiers)};
     });
   };
-
-  const updateKoPlaceholders = (currentMatches: Match[]): Match[] => {
-    // This is a simplified version. In a real app, we'd calculate standings and winners.
-    // For now, we'll just handle direct winners of previous rounds if they are linked.
-    return currentMatches;
-  };
-
-  // --- Standings Calculation ---
-
-  const standings = useMemo(() => {
-    const stats: Record<string, StandingsEntry> = {};
-    teams.forEach(t => {
-      stats[t.id] = { teamId: t.id, games: 0, wins: 0, draws: 0, losses: 0, goalsFor: 0, goalsAgainst: 0, goalDiff: 0, points: 0 };
-    });
-
-    matches.filter(m => m.stage === 'GROUP' && m.scoreA !== undefined && m.scoreB !== undefined).forEach(m => {
-      const sA = stats[m.teamAId];
-      const sB = stats[m.teamBId];
-      if (!sA || !sB) return;
-
-      sA.games++;
-      sB.games++;
-      sA.goalsFor += m.scoreA!;
-      sA.goalsAgainst += m.scoreB!;
-      sB.goalsFor += m.scoreB!;
-      sB.goalsAgainst += m.scoreA!;
-      sA.goalDiff = sA.goalsFor - sA.goalsAgainst;
-      sB.goalDiff = sB.goalsFor - sB.goalsAgainst;
-
-      if (m.scoreA! > m.scoreB!) {
-        sA.wins++;
-        sA.points += 3;
-        sB.losses++;
-      } else if (m.scoreB! > m.scoreA!) {
-        sB.wins++;
-        sB.points += 3;
-        sA.losses++;
-      } else {
-        sA.draws++;
-        sB.draws++;
-        sA.points += 1;
-        sB.points += 1;
-      }
-    });
-
-    return Object.values(stats).sort((a, b) => {
-      if (b.points !== a.points) return b.points - a.points;
-      if (b.goalDiff !== a.goalDiff) return b.goalDiff - a.goalDiff;
-      return b.goalsFor - a.goalsFor;
-    });
-  }, [matches, teams]);
+  const decideWinner = (id:string,teamId:string) => setDraft(prev=>({...prev,matches:resolveBracket(prev.matches.map(m=>m.id===id?{...m,decidingWinnerId:teamId}:m),prev.teams,prev.groups,prev.qualifiers)}));
+  const standings = useMemo(()=>standingsFor(teams,matches),[teams,matches]);
+  const setQualifier = (group:Group, rank:number, teamId:string) => setDraft(prev=>{
+    const order=[...(prev.qualifiers?.[group.name] || Array(group.teamIds.length).fill(''))];
+    const previous=order[rank];const index=order.indexOf(teamId);if(index>=0)order[index]=previous;order[rank]=teamId;
+    const qualifiers={...prev.qualifiers,[group.name]:order};
+    return {...prev,qualifiers,matches:resolveBracket(prev.matches,prev.teams,prev.groups,qualifiers)};
+  });
 
   const groupStandings = useMemo(() => {
     return groups.map(g => ({
@@ -305,201 +215,16 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
   // --- Generation Logic ---
 
   const generateTournament = () => {
-    setIsGenerating(true);
-    setError(null);
-
-    setTimeout(() => {
+    setIsGenerating(true); setError(null);
+    setTimeout(()=>{
       try {
-        // 1. Determine Format
-        let activeFormat = format;
-        if (format === 'AUTO') {
-          if (teams.length <= 5) activeFormat = 'ROUND_ROBIN';
-          else if (teams.length <= 10) activeFormat = 'GROUPS_FINAL';
-          else activeFormat = 'GROUPS_SEMI_FINAL';
-        }
-
-        // 2. Generate Groups
-        const newGroups: Group[] = [];
-        if (activeFormat === 'ROUND_ROBIN') {
-          newGroups.push({ name: 'Gruppe A', teamIds: teams.map(t => t.id) });
-        } else {
-          const numGroups = teams.length <= 8 ? 2 : 4;
-          for (let i = 0; i < numGroups; i++) {
-            newGroups.push({ name: `Gruppe ${String.fromCharCode(65 + i)}`, teamIds: [] });
-          }
-          // Distribute teams
-          teams.forEach((t, i) => {
-            newGroups[i % numGroups].teamIds.push(t.id);
-          });
-        }
-        setGroups(newGroups);
-
-        // 3. Generate Group Matches
-        const groupMatches: Match[] = [];
-        newGroups.forEach(g => {
-          for (let i = 0; i < g.teamIds.length; i++) {
-            for (let j = i + 1; j < g.teamIds.length; j++) {
-              groupMatches.push({
-                id: `m-g-${g.name}-${i}-${j}`,
-                teamAId: g.teamIds[i],
-                teamBId: g.teamIds[j],
-                stage: 'GROUP',
-                group: g.name
-              });
-            }
-          }
-        });
-
-        // 4. Generate KO Matches (Placeholders)
-        const koMatches: Match[] = [];
-        if (activeFormat === 'GROUPS_FINAL') {
-          koMatches.push({
-            id: 'm-final',
-            teamAId: '', teamBId: '',
-            placeholderA: '1. Gruppe A', placeholderB: '1. Gruppe B',
-            stage: 'FINAL'
-          });
-        } else if (activeFormat === 'GROUPS_SEMI_FINAL') {
-          koMatches.push({ id: 'm-sf1', teamAId: '', teamBId: '', placeholderA: '1. Gruppe A', placeholderB: '2. Gruppe B', stage: 'SEMI' });
-          koMatches.push({ id: 'm-sf2', teamAId: '', teamBId: '', placeholderA: '1. Gruppe B', placeholderB: '2. Gruppe A', stage: 'SEMI' });
-          if (hasThirdPlace) koMatches.push({ id: 'm-3rd', teamAId: '', teamBId: '', placeholderA: 'Verlierer SF1', placeholderB: 'Verlierer SF2', stage: 'THIRD_PLACE' });
-          koMatches.push({ id: 'm-final', teamAId: '', teamBId: '', placeholderA: 'Sieger SF1', placeholderB: 'Sieger SF2', stage: 'FINAL' });
-        }
-
-        const allMatches = [...groupMatches, ...koMatches].sort((a, b) => {
-          const order = { 'GROUP': 0, 'QUARTER': 1, 'SEMI': 2, 'THIRD_PLACE': 3, 'FINAL': 4, 'KO': 5 };
-          return order[a.stage] - order[b.stage];
-        });
-        
-        // 5. Scheduling
-        const scheduledMatches = scheduleMatches(allMatches);
-        if (!scheduledMatches) {
-          setError("Zeitplan konnte nicht erstellt werden. Erhöhe die Zeit oder füge mehr Felder hinzu.");
-          setIsGenerating(false);
-          return;
-        }
-
-        setMatches(scheduledMatches);
-        setActiveTab('SCHEDULE');
-      } catch (e) {
-        setError("Ein Fehler ist bei der Generierung aufgetreten.");
-      }
+        const config: TournamentConfig={teams,durationMode,numDays,startTime,endTime,matchDuration,breakDuration,numFields,format,hasThirdPlace,hasAwardCeremony,awardCeremonyDuration};
+        const generated=makeTournament(config);
+        const scheduled=scheduleTournament(generated.matches,config);
+        setDraft(prev=>({...prev,groups:generated.groups,matches:resolveBracket(scheduled,teams,generated.groups),qualifiers:{},activeTab:'SCHEDULE'}));
+      } catch(e){setError(e instanceof Error?e.message:'Die Planung ist fehlgeschlagen.');}
       setIsGenerating(false);
-    }, 1000);
-  };
-
-  const scheduleMatches = (matchesToSchedule: Match[]): Match[] | null => {
-    const result: Match[] = [];
-    const remainingMatches = [...matchesToSchedule];
-    
-    const teamLastMatchEnd: Record<string, number> = {}; // teamId -> end timestamp in minutes
-    const teamConsecutiveGames: Record<string, number> = {}; // teamId -> count of consecutive games
-    const fieldLastMatchEnd: Record<number, number> = {}; // field -> end timestamp
-
-    const timeToMin = (t: string) => {
-      const [h, m] = t.split(':').map(Number);
-      return h * 60 + m;
-    };
-
-    const minToTime = (m: number) => {
-      const h = Math.floor(m / 60);
-      const min = m % 60;
-      return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
-    };
-
-    const startMin = timeToMin(startTime);
-    const endMin = durationMode === 'AUTO' ? Infinity : timeToMin(endTime);
-    const slotSize = matchDuration + breakDuration;
-
-    let currentDay = 1;
-    let currentTimestamp = startMin;
-
-    while (remainingMatches.length > 0) {
-      if (durationMode === 'FIXED' && currentTimestamp + matchDuration > endMin) {
-        if (currentDay < numDays) {
-          currentDay++;
-          currentTimestamp = startMin;
-          for (let f = 1; f <= numFields; f++) fieldLastMatchEnd[f] = 0;
-          Object.keys(teamLastMatchEnd).forEach(k => {
-            teamLastMatchEnd[k] = 0;
-            teamConsecutiveGames[k] = 0;
-          });
-          continue;
-        } else {
-          return null;
-        }
-      }
-
-      for (let f = 1; f <= numFields; f++) {
-        if (remainingMatches.length === 0) break;
-
-        // Pass 1: Try to find a match where both teams are rested (0 consecutive games)
-        let matchIndex = remainingMatches.findIndex(m => {
-          const checkTeamRested = (teamId: string) => {
-            if (!teamId) return true;
-            const lastEnd = teamLastMatchEnd[teamId] || 0;
-            if (lastEnd === 0) return true;
-            // Rested means they didn't play in the previous slot
-            return (lastEnd + breakDuration + slotSize) <= currentTimestamp;
-          };
-          return checkTeamRested(m.teamAId) && checkTeamRested(m.teamBId);
-        });
-
-        // Pass 2: If not found, try to find a match where teams have < 2 consecutive games
-        if (matchIndex === -1) {
-          matchIndex = remainingMatches.findIndex(m => {
-            const checkTeamAllowed = (teamId: string) => {
-              if (!teamId) return true;
-              const lastEnd = teamLastMatchEnd[teamId] || 0;
-              const consecutive = teamConsecutiveGames[teamId] || 0;
-              if (lastEnd === 0) return true;
-              
-              // Must have at least the basic break
-              if (lastEnd + breakDuration > currentTimestamp) return false;
-              
-              // Strictly no 3rd game in a row
-              const isConsecutive = Math.abs(currentTimestamp - lastEnd - breakDuration) < 2;
-              if (isConsecutive && consecutive >= 2) return false;
-              
-              return true;
-            };
-            return checkTeamAllowed(m.teamAId) && checkTeamAllowed(m.teamBId);
-          });
-        }
-
-        if (matchIndex !== -1) {
-          const m = remainingMatches.splice(matchIndex, 1)[0];
-          m.time = minToTime(currentTimestamp);
-          m.field = f;
-          m.day = currentDay;
-          
-          const end = currentTimestamp + matchDuration;
-          fieldLastMatchEnd[f] = end;
-          
-          const updateTeam = (teamId: string) => {
-            if (!teamId) return;
-            const lastEnd = teamLastMatchEnd[teamId] || 0;
-            const isConsecutive = lastEnd > 0 && Math.abs(currentTimestamp - lastEnd - breakDuration) < 2;
-            
-            if (isConsecutive) {
-              teamConsecutiveGames[teamId] = (teamConsecutiveGames[teamId] || 0) + 1;
-            } else {
-              teamConsecutiveGames[teamId] = 1;
-            }
-            teamLastMatchEnd[teamId] = end;
-          };
-
-          updateTeam(m.teamAId);
-          updateTeam(m.teamBId);
-          result.push(m);
-        }
-      }
-
-      currentTimestamp += slotSize;
-      if (currentTimestamp > startMin + (24 * 60 * numDays)) return null;
-    }
-
-    return result;
+    },20);
   };
 
   // --- Exports ---
@@ -509,6 +234,7 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
     
     // Sheet 1: Schedule
     const scheduleData = matches.map(m => ({
+      'Tag': m.day,
       'Zeit': m.time,
       'Feld': m.field,
       'Team A': m.teamAId ? getTeamName(m.teamAId) : m.placeholderA,
@@ -520,7 +246,8 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(scheduleData), "Spielplan");
 
     // Sheet 2: Standings
-    const standingsData = standings.map((s, i) => ({
+    const standingsData = groupStandings.flatMap(group=>group.standings.map((s, i) => ({
+      'Gruppe':group.name,
       'Platz': i + 1,
       'Team': getTeamName(s.teamId),
       'Spiele': s.games,
@@ -530,17 +257,16 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
       'Tore': `${s.goalsFor}:${s.goalsAgainst}`,
       'Diff': s.goalDiff,
       'Punkte': s.points
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(standingsData), "Tabelle");
+    })));
+    if(groups.length)XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(standingsData), "Gruppentabellen");
 
-    // Sheet 3: Final Ranking
-    const finalRankingData = standings.map((s, i) => ({
-      'Rang': i + 1,
-      'Team': getTeamName(s.teamId),
-      'Punkte': s.points,
-      'Tordifferenz': s.goalDiff
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(finalRankingData), "Endplatzierung");
+    const final=matches.find(m=>m.stage==='FINAL');
+    const third=matches.find(m=>m.stage==='THIRD_PLACE');
+    if(final?.winnerId){
+      const finalRankingData=[{Rang:1,Team:getTeamName(final.winnerId)},{Rang:2,Team:getTeamName(final.winnerId===final.teamAId?final.teamBId:final.teamAId)}];
+      if(third?.winnerId)finalRankingData.push({Rang:3,Team:getTeamName(third.winnerId)},{Rang:4,Team:getTeamName(third.winnerId===third.teamAId?third.teamBId:third.teamAId)});
+      XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(finalRankingData),'Endplatzierung');
+    }
 
     XLSX.writeFile(wb, "Turnierplan.xlsx");
   };
@@ -553,32 +279,24 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
     doc.text(`Datum: ${new Date().toLocaleDateString()}`, 14, 30);
 
     // Schedule Table
-    (doc as any).autoTable({
+    autoTable(doc, {
       startY: 40,
-      head: [['Zeit', 'Feld', 'Team A', 'Team B', 'Ergebnis']],
+      head: [['Tag', 'Zeit', 'Feld', 'Team A', 'Team B', 'Ergebnis']],
       body: matches.map(m => [
-        m.time, 
+        m.day, m.time, 
         m.field, 
         m.teamAId ? getTeamName(m.teamAId) : m.placeholderA, 
         m.teamBId ? getTeamName(m.teamBId) : m.placeholderB,
-        m.scoreA !== undefined ? `${m.scoreA}:${m.scoreB}` : '-'
+        m.scoreA !== undefined && m.scoreB !== undefined ? `${m.scoreA}:${m.scoreB}` : '-'
       ]),
     });
 
-    // Standings Table
-    doc.addPage();
-    doc.text("Tabelle", 14, 22);
-    (doc as any).autoTable({
-      startY: 30,
-      head: [['Platz', 'Team', 'Sp', 'S', 'U', 'N', 'Tore', 'Diff', 'Pkt']],
-      body: standings.map((s, i) => [
-        i + 1, 
-        getTeamName(s.teamId), 
-        s.games, s.wins, s.draws, s.losses, 
-        `${s.goalsFor}:${s.goalsAgainst}`, 
-        s.goalDiff, s.points
-      ]),
-    });
+    if(groups.length){
+      doc.addPage();doc.text('Gruppentabellen',14,22);
+      autoTable(doc,{startY:30,head:[['Gruppe','Platz','Team','Sp','Tore','Diff','Pkt']],body:groupStandings.flatMap(group=>group.standings.map((s,i)=>[group.name,i+1,getTeamName(s.teamId),s.games,`${s.goalsFor}:${s.goalsAgainst}`,s.goalDiff,s.points]))});
+    }
+    const final=matches.find(m=>m.stage==='FINAL');
+    if(final?.winnerId){doc.addPage();doc.text('Endplatzierung',14,22);const ranking=[[1,getTeamName(final.winnerId)],[2,getTeamName(final.winnerId===final.teamAId?final.teamBId:final.teamAId)]];const third=matches.find(m=>m.stage==='THIRD_PLACE');if(third?.winnerId)ranking.push([3,getTeamName(third.winnerId)],[4,getTeamName(third.winnerId===third.teamAId?third.teamBId:third.teamAId)]);autoTable(doc,{startY:30,head:[['Platz','Team']],body:ranking});}
 
     doc.save("Turnierplan.pdf");
   };
@@ -587,6 +305,7 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
 
   return (
     <div className="min-h-screen bg-[#1C1F2A] text-white font-sans selection:bg-blue-500 selection:text-white">
+      {storageError && <p role="alert" className="bg-amber-500/20 p-3 text-sm">{storageError}</p>}
       <header className="bg-black/20 backdrop-blur-md border-b border-white/10 p-4 sm:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between sticky top-0 z-50 gap-4">
         <div className="flex items-center gap-3 sm:gap-4 w-full sm:w-auto">
           <button onClick={onBack} className="p-2 hover:bg-white/10 rounded-full transition-colors">
@@ -834,6 +553,7 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
 
           {activeTab === 'SCHEDULE' && (
             <motion.div key="schedule" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+              {matches.some(m=>m.stage!=='GROUP'&&!m.sourceA&&!m.sourceB) && <p className="text-amber-300 text-sm">Dieser Plan stammt aus der älteren K.-o.-Logik. Bitte im Setup neu generieren, bevor ihr das Turnier durchführt.</p>}
               {matches.length === 0 ? (
                 <div className="text-center py-20 glass-card rounded-3xl border-dashed border-white/10">
                   <Calendar size={48} className="mx-auto text-white/20 mb-4" />
@@ -841,8 +561,9 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
                 </div>
               ) : (
                 <div className="space-y-10">
+                  {hasAwardCeremony && <p className="text-sm text-gray-300">Siegerehrung: {awardCeremonyDuration} Minuten nach dem letzten Spiel (im Zeitplan reserviert).</p>}
                   {/* Group by Day */}
-                  {[...new Set(matches.map(m => m.day))].sort().map(day => (
+                  {[...new Set(matches.map(m => m.day))].sort((a,b)=>Number(a||0)-Number(b||0)).map(day => (
                     <div key={day} className="space-y-6">
                       <div className="flex items-center gap-4">
                         <h2 className="text-2xl font-bold">
@@ -871,6 +592,7 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
                                   type="text"
                                   inputMode="numeric"
                                   pattern="[0-9]*"
+                                  aria-label={`Tore Team A ${match.id}`} disabled={!match.teamAId || !match.teamBId}
                                   value={match.scoreA ?? ''}
                                   onChange={e => {
                                     const val = e.target.value.replace(/\D/g, '');
@@ -885,6 +607,7 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
                                   type="text"
                                   inputMode="numeric"
                                   pattern="[0-9]*"
+                                  aria-label={`Tore Team B ${match.id}`} disabled={!match.teamAId || !match.teamBId}
                                   value={match.scoreB ?? ''}
                                   onChange={e => {
                                     const val = e.target.value.replace(/\D/g, '');
@@ -894,6 +617,8 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
                                 />
                               </div>
                             </div>
+                            {match.stage !== 'GROUP' && match.scoreA !== undefined && match.scoreB !== undefined && match.scoreA === match.scoreB && <label className="block mt-3 text-xs text-amber-300">Unentschieden: Sieger nach Entscheidung wählen<select aria-label={`Entscheidungssieger ${match.id}`} value={match.decidingWinnerId||''} onChange={e=>decideWinner(match.id,e.target.value)} className="block w-full bg-[#252938] rounded p-2 mt-1"><option value="">Bitte wählen</option><option value={match.teamAId}>{getTeamName(match.teamAId)}</option><option value={match.teamBId}>{getTeamName(match.teamBId)}</option></select></label>}
+                            {match.winnerId && <p className="mt-2 text-xs text-emerald-400">Sieger: {getTeamName(match.winnerId)}</p>}
                           </div>
                         ))}
                       </div>
@@ -928,6 +653,7 @@ export default function TournamentPlanner({ onBack }: TournamentPlannerProps) {
                           </div>
                         </div>
                       </div>
+                      {matches.filter(m=>m.group===group.name).every(m=>m.scoreA!==undefined&&m.scoreB!==undefined) && group.standings.some((entry,i)=>i<2&&group.standings.some((other,j)=>i!==j&&entry.points===other.points&&entry.goalDiff===other.goalDiff&&entry.goalsFor===other.goalsFor)) && <div className="p-4 text-xs text-amber-300 space-y-2"><p>Gleichstand nach Punkten, Tordifferenz und Toren. Qualifikation nach eurem weiteren Entscheidungsverfahren bestätigen:</p>{group.standings.slice(0,2).map((entry,rank)=><label key={rank} className="block">Platz {rank+1}<select aria-label={`${group.name} Qualifikation Platz ${rank+1}`} className="ml-2 bg-[#252938] p-2 rounded" value={draft.qualifiers?.[group.name]?.[rank]||''} onChange={e=>setQualifier(group,rank,e.target.value)}><option value="">Bitte bestätigen</option>{group.standings.filter(t=>t.points===entry.points&&t.goalDiff===entry.goalDiff&&t.goalsFor===entry.goalsFor).map(t=><option key={t.teamId} value={t.teamId}>{getTeamName(t.teamId)}</option>)}</select></label>)}</div>}
                       <div className="overflow-x-auto custom-scrollbar">
                         <table className="w-full text-sm">
                           <thead>

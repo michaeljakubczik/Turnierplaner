@@ -1,5 +1,5 @@
 import type { SeasonInput, Schedule } from './seasonSolver';
-import { hasLongJourney } from './teamTravel';
+import { journeyKm } from './teamTravel';
 
 // Assign whole match days to eligible hosts using min-cost matching.
 // The first home day has priority, then each additional home day costs more.
@@ -24,7 +24,7 @@ export function balanceHosts(schedule: Schedule, input: SeasonInput, maxHomeDays
     choices[i] = [];
     input.teams.forEach((host, j) => {
       if (!counts.get(host.id) || !input.availability[host.id]?.[dateId] || !input.homeAvailability[host.id]?.[dateId] || host.maxCapacity < participants.length) return;
-      if (!finale && participants.some(t => counts.get(t.id) === 1 && hasLongJourney(t.homePlace!, host.homePlace!))) return;
+      if (!finale && participants.some(t => counts.get(t.id) === 1 && (journeyKm(t,host,input) ?? Infinity) > 100)) return;
       choices[i].push({ teamId: host.id, edge: addEdge(dayStart + i, teamStart + j, 0) });
     });
   });

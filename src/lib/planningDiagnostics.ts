@@ -8,22 +8,22 @@ export function analyzeSeason(input: SeasonInput): PlanningTip[] {
   const sample = (ds: typeof dates) => ds.slice(0, 3).map(d => label(d.value)).join(', ');
   const required = (teams.length - 1) * mode;
   for (const team of teams) {
-    if (!team.homePlace) add(`Heimspielort für ${team.name} bestätigen`, 'Einen gefundenen Ort auswählen, damit die automatische 100-km-Regel geprüft werden kann.', true);
+    if (!team.homePlace && !(finale && teams.length === 2 && mode === 1)) add(`Heimspielort für ${team.name} bestätigen`, 'Einen gefundenen Ort auswählen, damit die automatische 100-km-Regel geprüft werden kann.', true);
     const available = dates.filter(d => av[team.id]?.[d.id]);
     const regular = available.filter(d => !finale || d.id !== final?.id).length;
     const capacity = regular * Math.min(teamMax, 2) + (teamMax >= 3 ? Math.min(regular, triples) : 0) + (finale && available.some(d => d.id === final?.id) ? 1 : 0);
     if (capacity < required) add(`${team.name}: zu wenig Spielmöglichkeiten`, `${required} Spiele benötigt, höchstens ${capacity} mit den eingetragenen Terminen und Team-Limits möglich. Bei ${team.name} zusätzliche Termine anfragen oder das Tageslimit bzw. erlaubte Drei-Spiele-Tage prüfen.`, true);
     const tightPartners = teams.filter(other => other.id !== team.id && dates.filter(d => av[team.id]?.[d.id] && av[other.id]?.[d.id]).length === mode);
-    if (tightPartners.length) add(`${team.name}: kaum Terminspielraum`, `Mit ${tightPartners.slice(0, 3).map(t => t.name).join(', ')} gibt es jeweils genau ${mode} gemeinsame Termine. Alle werden für diese Paarungen benötigt; zusätzliche gemeinsame Termine würden die Suche entlasten. Bei ${team.name} gezielt nach Alternativen fragen.`);
-    const isolated = available.filter(d => teams.filter(t => av[t.id]?.[d.id]).length < 3 && !(finale && d.id === final?.id));
-    if (isolated.length) add(`${team.name}: abweichende Termine abgleichen`, `${sample(isolated)}${isolated.length > 3 ? ' und weitere Termine' : ''}: Weniger als drei Teams verfügbar; dort sind regulär keine zwei unterschiedlichen Spiele möglich. Gemeinsame Ersatztermine mit anderen Teams erfragen.`, true);
-    if (!available.some(d => hv[team.id]?.[d.id] && team.maxCapacity >= 3)) add(`Heimspielmöglichkeiten von ${team.name} prüfen`, 'Kein regulärer Heimspieltag mit mindestens drei Teams eingetragen. Weitere H-Termine oder die tatsächliche Gastgeberkapazität prüfen; fehlende Gastgeber erschweren die gleichmäßige Verteilung.');
+    if (!input.allowRepeatPairPerDay && tightPartners.length) add(`${team.name}: kaum Terminspielraum`, `Mit ${tightPartners.slice(0, 3).map(t => t.name).join(', ')} gibt es jeweils genau ${mode} gemeinsame Termine. Alle werden für diese Paarungen benötigt; zusätzliche gemeinsame Termine würden die Suche entlasten. Bei ${team.name} gezielt nach Alternativen fragen.`);
+    const isolated = available.filter(d => teams.filter(t => av[t.id]?.[d.id]).length < (input.allowRepeatPairPerDay ? 2 : 3) && !(finale && d.id === final?.id));
+    if (isolated.length) add(`${team.name}: abweichende Termine abgleichen`, `${sample(isolated)}${isolated.length > 3 ? ' und weitere Termine' : ''}: ${input.allowRepeatPairPerDay ? 'Weniger als zwei Teams verfügbar; dort sind keine Begegnungen möglich.' : 'Weniger als drei Teams verfügbar; dort sind regulär keine zwei unterschiedlichen Spiele möglich.'} Gemeinsame Ersatztermine mit anderen Teams erfragen.`, true);
+    if (!available.some(d => hv[team.id]?.[d.id] && team.maxCapacity >= (input.allowRepeatPairPerDay ? 2 : 3))) add(`Heimspielmöglichkeiten von ${team.name} prüfen`, `Kein regulärer Heimspieltag mit mindestens ${input.allowRepeatPairPerDay ? 'zwei' : 'drei'} Teams eingetragen. Weitere H-Termine oder die tatsächliche Gastgeberkapazität prüfen; fehlende Gastgeber erschweren die gleichmäßige Verteilung.`);
   }
   let pairIssues = 0;
   for (let i = 0; i < teams.length; i++) for (let j = i + 1; j < teams.length; j++) {
     const a = teams[i], b = teams[j];
     const common = dates.filter(d => av[a.id]?.[d.id] && av[b.id]?.[d.id]);
-    if (common.length < mode && pairIssues++ < 3) {
+    if (!input.allowRepeatPairPerDay && common.length < mode && pairIssues++ < 3) {
       const alternatives = dates.filter(d => !!av[a.id]?.[d.id] !== !!av[b.id]?.[d.id]);
       add(`${a.name} / ${b.name}: gemeinsame Termine fehlen`, `${common.length} gemeinsame Termine für ${mode} Begegnungen. Pro Paar ist nur eine Begegnung je Tag erlaubt. Verfügbarkeit beider Teams abgleichen${alternatives.length ? `, etwa am ${sample(alternatives)}` : ', und gemeinsame Termine ergänzen'}. Ein höheres Spielelimit allein löst diese Engstelle nicht.`, true);
     }
@@ -33,8 +33,8 @@ export function analyzeSeason(input: SeasonInput): PlanningTip[] {
     const hosts = teams.filter(t => av[t.id]?.[d.id] && hv[t.id]?.[d.id]);
     const capacity = Math.min(n, Math.max(0, ...hosts.map(t => t.maxCapacity)));
     const isFinal = finale && d.id === final?.id;
-    const upper = isFinal ? (capacity >= teams.length ? teams.length / 2 : 0) : capacity >= 3 ? Math.min(dayMax, Math.floor(capacity * teamMax / 2), n * (n - 1) / 2) : 0;
-    return { d, upper, potential: Math.min(Math.floor(capacity * teamMax / 2), n * (n - 1) / 2), isFinal };
+    const upper = isFinal ? (capacity >= teams.length ? teams.length / 2 : 0) : capacity >= (input.allowRepeatPairPerDay ? 2 : 3) ? Math.min(dayMax, Math.floor(capacity * teamMax / 2), (input.allowRepeatPairPerDay ? n * (n - 1) / 2 * mode : n * (n - 1) / 2)) : 0;
+    return { d, upper, potential: Math.min(Math.floor(capacity * teamMax / 2), (input.allowRepeatPairPerDay ? n * (n - 1) / 2 * mode : n * (n - 1) / 2)), isFinal };
   });
   const total = teams.length * required / 2;
   const upper = usable.reduce((sum, d) => sum + d.upper, 0);
@@ -48,7 +48,7 @@ export function analyzeSeason(input: SeasonInput): PlanningTip[] {
     if (!teams.some(t => av[t.id]?.[final.id] && hv[t.id]?.[final.id] && t.maxCapacity >= teams.length)) add('Gastgeber für den Abschluss bestätigen', `Am ${label(final.value)} H bei einem verfügbaren Team aktivieren, das tatsächlich alle ${teams.length} Teams aufnehmen kann.`, true);
     if (input.ignoredLateDates) add('Spätere Termine werden ausgeschlossen', `${input.ignoredLateDates} Termine nach dem gemeinsamen Abschluss zählen nicht zur Kapazität. Falls benötigt, einen späteren gemeinsamen Abschluss abstimmen.`);
   }
-  if (teamMax < 2) add('Weite Anreisen benötigen zwei Spiele', 'Bei mehr als 100 km Luftlinie brauchen Gäste regulär mindestens zwei Spiele. Mit einem Spiel pro Team sind solche Anreisen ausgeschlossen. Das Team-Tageslimit prüfen.');
+  if (teamMax < 2) add('Weite Anreisen benötigen zwei Spiele', `Bei mehr als 100 km ${input.distanceMode==='road'?'Straßenentfernung':'Luftlinie'} brauchen Gäste regulär mindestens zwei Spiele. Mit einem Spiel pro Team sind solche Anreisen ausgeschlossen. Das Team-Tageslimit prüfen.`);
   // Put verifiable bottlenecks before suggestions; keep the complete list accessible.
   add('Suche fortsetzen und Eingaben prüfen', 'Nachgewiesene Engstellen zuerst beheben. Bei einem Suchlimit ohne solche Engstellen „Gründlich suchen“ verwenden: Das Suchlimit beweist keine Unmöglichkeit. Bleibt die Suche erfolglos, Eingaben exportieren, um schwierige Kombinationen gezielt zu untersuchen.');
   return tips.sort((a, b) => Number(b.proven) - Number(a.proven));
