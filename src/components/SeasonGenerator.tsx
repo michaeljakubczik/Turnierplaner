@@ -26,7 +26,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import * as XLSX from 'xlsx';
 import { calendarPeriods, periodMarks, hasVacationData, regionNames, type Region } from '../lib/seasonCalendar';
 import { journeyKm, manualKm, travelPairKey, travelPairPlacesKey, findHomePlaces, type HomePlace } from '../lib/teamTravel';
-import { comparePlans, draftKey, emptyProject, mergePlans, parseProject, scheduleSignature, seasonInput, type SeasonDraft, type SeasonProject } from '../lib/seasonProject';
+import { comparePlans, draftKey, emptyProject, mergePlans, parseProject, scheduleSignature, seasonInput, migrateTeamDayLimit, type SeasonDraft, type SeasonProject } from '../lib/seasonProject';
 
 import type { Team, MatchMode, DateEntry, Availability, HomeAvailability, Schedule, ValidationReport, SearchProgress, SeasonInput, SolverResult, PlanAlternative } from '../lib/seasonSolver';
 
@@ -77,7 +77,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const [project, setProject] = useState<SeasonProject>(() => {
     try {
       const stored = localStorage.getItem('turnierplaner_project_v1');
-      if (stored) {const p=parseProject(JSON.parse(stored));return {...p,draft:{...p.draft,distanceMode:'air' as const}};}
+      if (stored) {const p=parseProject(JSON.parse(stored));return {...p,draft:{...migrateTeamDayLimit(p.draft),distanceMode:'air' as const}};}
       const legacy = localStorage.getItem('matchmaster_season_draft_v2');
       if (legacy) { const saved = JSON.parse(legacy); if (saved._schemaVersion === 1) return parseProject(emptyProject(saved.data)); }
     } catch { storageBlocked.current = true; }
@@ -121,7 +121,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       const loaded = parseProject(JSON.parse(await file.text()));
       (Object.values(placeRequests.current) as AbortController[]).forEach(r=>r.abort());
       storageBlocked.current = false;
-      setProject({...loaded,draft:{...loaded.draft,distanceMode:'air'}}); setPlanView('all'); setCalendarTeamId(''); setAvailabilityUndo(null);
+      setProject({...loaded,draft:{...migrateTeamDayLimit(loaded.draft),distanceMode:'air'}}); setPlanView('all'); setCalendarTeamId(''); setAvailabilityUndo(null);
       setPlaceChoices({}); setPlaceMessages({}); setError(null); setTips([]);
       setProjectNotice('Projekt geladen. Eingaben, Spielpläne und Favoriten wurden wiederhergestellt.');
     } catch (e) { setProjectNotice(e instanceof Error ? e.message : 'Projektdatei konnte nicht geladen werden.'); }
@@ -380,7 +380,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     setSearchProgress({ iterations: 0, attempts: 0, elapsedMs: 0, bestDays: null });
     const durationMs = thorough ? 120000 : 30000;
     setSearchDuration(durationMs);
-    const input: SeasonInput = { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates, allowRepeatPairPerDay: draft.allowRepeatPairPerDay, distanceMode:'air', manualDistances:draft.manualDistances, maxSeasonDays:draft.maxSeasonDays };
+    const input: SeasonInput = { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates, allowRepeatPairPerDay: draft.allowRepeatPairPerDay, distanceMode:'air', manualDistances:draft.manualDistances, maxDaysPerTeam:draft.maxDaysPerTeam };
     try {
       const worker = new Worker(new URL('../lib/seasonSolver.worker.ts', import.meta.url), { type: 'module' });
       workerRef.current = worker;
@@ -540,7 +540,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 </div>
                 <p className="text-[10px] opacity-50 font-mono uppercase">Maximale Anzahl an Spielen pro Team an einem Tag.</p>
               </div>
-            <label className="block space-y-2 text-sm"><span className="font-medium">Maximale Spieltage insgesamt <span className="text-xs text-gray-400">(optional)</span></span><input aria-label="Maximale Spieltage insgesamt" type="number" min="1" max="1000" step="1" value={draft.maxSeasonDays??''} placeholder="Unbegrenzt" onChange={e=>{const value=e.target.value;const n=Number(value);if(value!==''&&(!Number.isInteger(n)||n<1||n>1000))return;setDraft(prev=>({...prev,maxSeasonDays:value===''?undefined:n}));}} className="block w-36 rounded bg-white/10 px-3 py-2"/><span className="block text-xs text-gray-400">Obergrenze für alle genutzten Spieltage der Saison, einschließlich Saisonabschluss. Leeres Feld = unbegrenzt.</span></label>
+            <label className="block space-y-2 text-sm"><span className="font-medium">Maximale Spieltage pro Team <span className="text-xs text-gray-400">(optional)</span></span><input aria-label="Maximale Spieltage pro Team" type="number" min="1" max="1000" step="1" value={draft.maxDaysPerTeam??''} placeholder="Unbegrenzt" onChange={e=>{const value=e.target.value;const n=Number(value);if(value!==''&&(!Number.isInteger(n)||n<1||n>1000))return;setDraft(prev=>({...prev,maxDaysPerTeam:value===''?undefined:n}));}} className="block w-36 rounded bg-white/10 px-3 py-2"/><span className="block text-xs text-gray-400">Gilt für jedes Team einzeln. Mehrere Spiele am selben Tag zählen als ein Spieltag; der Saisonabschluss zählt mit. Leeres Feld = unbegrenzt.</span></label>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={draft.allowRepeatPairPerDay ?? false} onChange={e=>setDraft(prev=>({...prev,allowRepeatPairPerDay:e.target.checked}))} /><span>Rückspiele am selben Tag erlauben</span></label>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag: genau ein Spiel pro Team<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
             <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
@@ -857,7 +857,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 <li>Alle Paarungen finden genau so oft statt, wie im Spielmodus gewählt.</li>
                 <li>Spiele nur an ausgewählten Terminen und mit verfügbaren Teams. Nicht jeder Termin muss genutzt werden.</li>
                 <li>Ein verfügbarer Gastgeber mit Heimspielmöglichkeit und ausreichender Teamkapazität pro Spieltag; er spielt mindestens einmal mit.</li>
-                <li>Die eingestellten Grenzen für Spiele pro Tag, pro Team, Drei-Spiele-Tage und die optionale maximale Zahl an Saisonspieltagen werden eingehalten. Der Saisonabschluss zählt als Spieltag mit.</li>
+                <li>Die eingestellten Grenzen für Spiele pro Tag, pro Team, Drei-Spiele-Tage und die optionale maximale Zahl an Spieltagen pro Team werden eingehalten. Der Saisonabschluss zählt als Spieltag mit.</li>
                 <li>Reguläre Spieltage enthalten mindestens zwei Spiele. Gäste mit mehr als 100 km Anreise spielen mindestens zweimal; eingetragene Wegstrecken ersetzen dabei die Luftlinie.</li>
                 <li>Pro Teampaar höchstens ein Spiel je Tag, außer „Rückspiele am selben Tag erlauben“ ist aktiviert.</li>
                 <li>Bei gemeinsamem Saisonabschluss: alle Teams mit genau einem Spiel am letzten gemeinsam verfügbaren Termin. Gerade Teamzahl und ausreichende Gastgeber- und Spielkapazität sind nötig; spätere Termine entfallen. Dieser Abschluss ist von den Mindestzahlen für Spiele und weite Anreisen ausgenommen.</li>

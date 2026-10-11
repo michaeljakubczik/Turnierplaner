@@ -169,15 +169,17 @@ test('finale-only plan does not require locations, and search publishes retained
   assert.ok(result.schedule);assert.ok(checkpoint>0);
 });
 
-test('season-day cap is enforced and low caps give an actionable error',()=>{
- const input=fixture(4,8);input.maxMatchesPerDay=3;input.maxMatchesPerTeamPerDay=2;input.maxSeasonDays=2;
- const result=solveSeason(input,{durationMs:300});validate(input,result);assert.ok(Object.keys(result.schedule!).length<=2);
- input.maxSeasonDays=1;assert.match(solveSeason(input,{durationMs:100}).error!,/Spieltaglimit zu niedrig/);
- input.maxSeasonDays=0;assert.match(solveSeason(input,{durationMs:100}).error!,/ganze Zahl/);
+test('team-day cap permits a season with more dates than any individual team',()=>{
+ const input=fixture(5,4);input.maxMatchesPerDay=3;input.maxMatchesPerTeamPerDay=2;input.maxDaysPerTeam=3;
+ const result=solveSeason(input,{durationMs:1000});validate(input,result);assert.ok(Object.keys(result.schedule!).length>3);
+ for(const team of input.teams)assert.ok(Object.values(result.schedule!).filter(day=>day.matches.some(m=>m.teamA===team.id||m.teamB===team.id)).length<=3);
+ input.maxDaysPerTeam=1;assert.match(solveSeason(input,{durationMs:100}).error!,/Spieltaglimit pro Team zu niedrig/);
+ input.maxDaysPerTeam=0;assert.match(solveSeason(input,{durationMs:100}).error!,/ganze Zahl/);
 });
-test('the shared season finale counts towards the season-day cap',()=>{
- const input=fixture(4,5,1,true);input.maxMatchesPerDay=3;input.maxSeasonDays=2;
- assert.match(solveSeason(input,{durationMs:100}).error!,/mindestens 3 Spieltage/);
- input.maxSeasonDays=3;const result=solveSeason(input,{durationMs:300});validate(input,result);
- assert.equal(Object.keys(result.schedule!).length,3);assert.ok(result.schedule![input.finalDayCandidate!.id]);
+test('the shared season finale counts towards each team day cap',()=>{
+ const input=fixture(4,5,1,true);input.maxMatchesPerDay=3;input.maxDaysPerTeam=1;
+ assert.match(solveSeason(input,{durationMs:100}).error!,/Spieltaglimit pro Team zu niedrig/);
+ input.maxDaysPerTeam=3;const result=solveSeason(input,{durationMs:300});validate(input,result);
+ assert.ok(result.schedule![input.finalDayCandidate!.id]);
+ for(const team of input.teams)assert.ok(Object.values(result.schedule!).filter(day=>day.matches.some(m=>m.teamA===team.id||m.teamB===team.id)).length<=3);
 });

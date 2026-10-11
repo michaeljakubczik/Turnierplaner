@@ -49,9 +49,15 @@ test('backup preserves manual pair distances and accepts formerly excluded host 
 });
 
 test('season-day limit survives backups and imported plans must obey it',()=>{
- const d=draft();d.matchMode=2;d.maxSeasonDays=2;
+ const d=draft();d.matchMode=2;d.maxDaysPerTeam=2;
  const r=solveSeason(seasonInput(d),{durationMs:100});assert.ok(r.schedule,r.error||'');const p=emptyProject(d);p.plans=mergePlans([],r.alternatives,d);
- assert.equal(parseProject(JSON.parse(JSON.stringify(p))).draft.maxSeasonDays,2);
- const invalid=structuredClone(p);invalid.plans[0].draft.maxSeasonDays=1;assert.throws(()=>parseProject(invalid));
- const bad=structuredClone(p);bad.draft.maxSeasonDays=0;assert.throws(()=>parseProject(bad));
+ assert.equal(parseProject(JSON.parse(JSON.stringify(p))).draft.maxDaysPerTeam,2);
+ const invalid=structuredClone(p);invalid.plans[0].draft.maxDaysPerTeam=1;assert.throws(()=>parseProject(invalid));
+ const bad=structuredClone(p);bad.draft.maxDaysPerTeam=0;assert.throws(()=>parseProject(bad));
+});
+
+test('legacy global limits migrate only editable settings without losing archived plans',async()=>{
+ const {migrateTeamDayLimit}=await import('./seasonProject');const legacy={...draft(),maxSeasonDays:8};
+ const migrated=migrateTeamDayLimit(legacy);assert.equal(migrated.maxDaysPerTeam,8);assert.equal(migrated.maxSeasonDays,undefined);assert.equal(legacy.maxSeasonDays,8);
+ assert.equal(migrateTeamDayLimit({...legacy,maxDaysPerTeam:6}).maxDaysPerTeam,6);
 });

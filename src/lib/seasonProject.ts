@@ -3,14 +3,14 @@ import type { Availability, DateEntry, HomeAvailability, MatchMode, PlanAlternat
 import { journeyKm, type RoadDistances, type ManualDistances } from './teamTravel';
 import { matchOrdinals } from './orderDayMatches';
 export type SeasonDraft = {
-  maxSeasonDays?: number; distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; manualDistances?: ManualDistances; seasonYear?: number; allowRepeatPairPerDay?: boolean; allTeamsOnFinalDay?: boolean; maxTripleDaysPerTeam?: number;
+  maxDaysPerTeam?: number; maxSeasonDays?: number; distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; manualDistances?: ManualDistances; seasonYear?: number; allowRepeatPairPerDay?: boolean; allTeamsOnFinalDay?: boolean; maxTripleDaysPerTeam?: number;
   teams: Team[]; dates: DateEntry[]; availability: Availability; homeAvailability: HomeAvailability;
   matchMode: MatchMode; maxMatchesPerDay: number; maxMatchesPerTeamPerDay: number;
 };
 export type SavedPlan = PlanAlternative & { id: string; draft: SeasonDraft; favorite: boolean; createdAt: string };
 export type SeasonProject = { format: 'turnierplaner-project'; version: 1; draft: SeasonDraft; plans: SavedPlan[]; selectedId: string | null; seen: Record<string, string[]>; holidayRegions: string[] };
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${stable(v)}`).join(',')}}` : JSON.stringify(value) ?? 'null';
-export const draftKey = (draft: SeasonDraft) => stable({ ...draft, allowUnevenHomeDays: undefined, maxSeasonDays: draft.maxSeasonDays, teams: [...draft.teams].sort((a,b)=>a.id.localeCompare(b.id)), dates: [...draft.dates].sort((a,b)=>a.id.localeCompare(b.id)), seasonYear: draft.seasonYear ?? 2026, allTeamsOnFinalDay: draft.allTeamsOnFinalDay ?? false, maxTripleDaysPerTeam: draft.maxTripleDaysPerTeam ?? 1 });
+export const draftKey = (draft: SeasonDraft) => stable({ ...draft, allowUnevenHomeDays: undefined, maxDaysPerTeam: draft.maxDaysPerTeam, teams: [...draft.teams].sort((a,b)=>a.id.localeCompare(b.id)), dates: [...draft.dates].sort((a,b)=>a.id.localeCompare(b.id)), seasonYear: draft.seasonYear ?? 2026, allTeamsOnFinalDay: draft.allTeamsOnFinalDay ?? false, maxTripleDaysPerTeam: draft.maxTripleDaysPerTeam ?? 1 });
 export const scheduleSignature = (schedule: Schedule) => Object.entries(schedule).sort(([a],[b])=>a.localeCompare(b)).map(([id,day])=>`${id}:${day.hostId}:${day.matches.map(m=>[m.teamA,m.teamB].sort().join('/')).sort().join(',')}`).join('|');
 export function planRank(plan: PlanAlternative, teams: Team[], dates: DateEntry[] = []): number[] {
   const days = Object.values(plan.schedule);
@@ -43,6 +43,7 @@ const integer=(x:unknown,min:number,max:number)=>Number.isInteger(x)&&Number(x)>
 const text=(x:unknown): x is string =>typeof x==='string'&&x.length>0&&x.length<1000;
 function validDraft(x: unknown): x is SeasonDraft {
   if(!obj(x)||!Array.isArray(x.teams)||x.teams.length<2||x.teams.length>100||!Array.isArray(x.dates)||x.dates.length>1000||!integer(x.matchMode,1,4)||!integer(x.maxMatchesPerDay,1,10)||!integer(x.maxMatchesPerTeamPerDay,1,3))return false;
+  if(x.maxDaysPerTeam!==undefined&&!integer(x.maxDaysPerTeam,1,1000))return false;
   if(x.maxSeasonDays!==undefined&&!integer(x.maxSeasonDays,1,1000))return false;
   if (x.manualDistances !== undefined && (!obj(x.manualDistances) || !Object.values(x.manualDistances).every(v=>obj(v)&&typeof v.placesKey==='string'&&typeof v.km==='number'&&Number.isFinite(v.km)&&v.km>=0&&v.km<=50000))) return false;
   if (x.distanceMode !== undefined && !['air','road'].includes(String(x.distanceMode))) return false;
@@ -58,7 +59,7 @@ function validPlan(x: unknown): x is SavedPlan {
   if(!obj(x)||!text(x.id)||typeof x.favorite!=='boolean'||!text(x.createdAt)||!validDraft(x.draft)||!obj(x.schedule)||!obj(x.report))return false;
   const input=seasonInput(x.draft), pairs=new Map<string,number>(), home:Record<string,number>={}, triples:Record<string,number>={};
   const allowed=new Set(input.seasonDates.map(d=>d.id));
-  if(input.maxSeasonDays!==undefined&&Object.keys(x.schedule).length>input.maxSeasonDays)return false;
+  if(x.draft.maxSeasonDays!==undefined&&Object.keys(x.schedule).length>x.draft.maxSeasonDays)return false;
   for(const [date,day] of Object.entries(x.schedule)) {
     if(!allowed.has(date)||!obj(day)||!Array.isArray(day.matches)||!text(day.hostId)||day.matches.length>input.maxMatchesPerDay)return false;
     const host=input.teams.find(t=>t.id===day.hostId);if(!host||!input.homeAvailability[host.id]?.[date]||!input.availability[host.id]?.[date])return false;
@@ -79,6 +80,7 @@ function validPlan(x: unknown): x is SavedPlan {
   }
   if(input.allTeamsOnFinalDay&&(!input.finalDayCandidate||!x.schedule[input.finalDayCandidate.id]))return false;
   if(Object.values(triples).some(n=>n>input.maxTripleDaysPerTeam)||pairs.size!==input.teams.length*(input.teams.length-1)/2||[...pairs.values()].some(n=>n!==input.matchMode))return false;
+  if(input.maxDaysPerTeam!==undefined&&input.teams.some(t=>Object.values(x.schedule as Schedule).filter(d=>d.matches.some(m=>m.teamA===t.id||m.teamB===t.id)).length>input.maxDaysPerTeam!))return false;
   const r=x.report;
   return Array.isArray(r.matchesPerDay)&&r.matchesPerDay.every(n=>integer(n,1,10))&&r.matchesPerDay.reduce<number>((a,b)=>a+Number(b),0)===Object.values(x.schedule).reduce<number>((n,d)=>n+(d as {matches:unknown[]}).matches.length,0)&&typeof r.deviation==='number'&&Number.isFinite(r.deviation)&&integer(r.maxMatchesPerTeamPerDay,1,3)&&obj(r.homeGameDistribution)&&Object.values(r.homeGameDistribution).every(n=>integer(n,0,1000))&&input.teams.every(t=>(r.homeGameDistribution as Record<string,number>)[t.id]===home[t.id]||((r.homeGameDistribution as Record<string,number>)[t.id]||0)===(home[t.id]||0))&&r.hardConstraintsSatisfied===true&&Array.isArray(r.softConstraintDeviations)&&r.softConstraintDeviations.every(s=>typeof s==='string');
 }
@@ -87,3 +89,10 @@ export function parseProject(value: unknown): SeasonProject {
   return value as SeasonProject;
 }
 export function emptyProject(draft: SeasonDraft): SeasonProject { return {format:'turnierplaner-project',version:1,draft,plans:[],selectedId:null,seen:{},holidayRegions:[]}; }
+
+// Correct the former global field only in editable inputs; archived plans retain their original settings.
+export function migrateTeamDayLimit(draft: SeasonDraft): SeasonDraft {
+  if(draft.maxSeasonDays===undefined)return draft;
+  const {maxSeasonDays,...remaining}=draft;
+  return {...remaining,maxDaysPerTeam:draft.maxDaysPerTeam??maxSeasonDays};
+}

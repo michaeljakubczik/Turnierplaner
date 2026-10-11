@@ -37,10 +37,11 @@ export function analyzeSeason(input: SeasonInput): PlanningTip[] {
     return { d, upper, potential: Math.min(Math.floor(capacity * teamMax / 2), (input.allowRepeatPairPerDay ? n * (n - 1) / 2 * mode : n * (n - 1) / 2)), isFinal };
   });
   const total = teams.length * required / 2;
-  if(input.maxSeasonDays!==undefined) {
+  if(input.maxDaysPerTeam!==undefined) {
     const finalDays=finale?1:0;
-    const minimum=finalDays+Math.ceil((total-(finale?teams.length/2:0))/dayMax);
-    add('Spieltaglimit prüfen', `Höchstens ${input.maxSeasonDays} Spieltage einschließlich Saisonabschluss erlaubt. Allein nach der Gesamtspielezahl und dem Spielelimit sind mindestens ${minimum} nötig. Das Limit erhöhen oder die Spielelimits prüfen; Team-Verfügbarkeit und Anreiseregeln können weitere Spieltage erfordern.`,input.maxSeasonDays<minimum);
+    const regularDays=input.maxDaysPerTeam-finalDays;
+    const capacity=regularDays*Math.min(teamMax,2)+(teamMax>=3?Math.min(regularDays,triples):0)+finalDays;
+    add('Spieltaglimit pro Team prüfen', `Jedes Team darf höchstens ${input.maxDaysPerTeam} eigene Spieltage einschließlich Saisonabschluss haben. ${required} Spiele benötigt, höchstens ${capacity} innerhalb dieses Limits möglich. Limit, Spiele pro Team/Tag und erlaubte Drei-Spiele-Tage prüfen. Die Saison darf insgesamt mehr Spieltage enthalten.`,capacity<required);
   }
   const upper = usable.reduce((sum, d) => sum + d.upper, 0);
   if (upper < total) add('Gesamtkapazität reicht nicht', `Selbst großzügig gerechnet höchstens ${upper} Spiele auf nutzbaren Terminen, benötigt werden ${total}. Zusätzliche gemeinsame Termine, Gastgeberkapazitäten und Spielelimits prüfen. Anreise- und Drei-Spiele-Regeln können die Kapazität weiter verringern.`, true);
