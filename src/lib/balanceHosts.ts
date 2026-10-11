@@ -1,3 +1,4 @@
+import { seasonTravel } from './seasonTravel';
 import type { SeasonInput, Schedule } from './seasonSolver';
 import { journeyKm } from './teamTravel';
 
@@ -15,21 +16,26 @@ export function balanceHosts(schedule: Schedule, input: SeasonInput, maxHomeDays
     graph[to].push({ to: from, reverse: graph[from].length - 1, capacity: 0, cost: -cost });
     return forward;
   };
+  const travelBound = 1 + days.length * input.teams.reduce((sum,team)=>sum+Math.max(0,...input.teams.map(host=>(journeyKm(team,host,input)??0)+(journeyKm(host,team,input)??0))),0);
+  const homeWeight=Math.ceil(travelBound*10)+days.length;
+  const eligible: string[][] = [];
   const choices: { teamId: string; edge: Edge }[][] = [];
   days.forEach(([dateId, day], i) => {
     addEdge(source, dayStart + i, 0);
     const counts = new Map(input.teams.map(t => [t.id, day.matches.filter(m => m.teamA === t.id || m.teamB === t.id).length]));
     const participants = input.teams.filter(t => counts.get(t.id)! > 0);
     const finale = input.allTeamsOnFinalDay && dateId === input.finalDayCandidate?.id;
-    choices[i] = [];
+    choices[i] = [];eligible[i]=[];
     input.teams.forEach((host, j) => {
       if (!counts.get(host.id) || !input.availability[host.id]?.[dateId] || !input.homeAvailability[host.id]?.[dateId] || host.maxCapacity < participants.length) return;
       if (!finale && participants.some(t => counts.get(t.id) === 1 && (journeyKm(t,host,input) ?? Infinity) > 100)) return;
-      choices[i].push({ teamId: host.id, edge: addEdge(dayStart + i, teamStart + j, 0) });
+      const km=participants.reduce((sum,t)=>sum+(journeyKm(t,host,input)??0)+(journeyKm(host,t,input)??0),0);
+      eligible[i].push(host.id);
+      choices[i].push({ teamId: host.id, edge: addEdge(dayStart + i, teamStart + j, Math.round(km*10)) });
     });
   });
   for (let j = 0; j < n; j++) {
-    for (let k = 0; k < Math.min(days.length, maxHomeDays); k++) addEdge(teamStart + j, sink, k === 0 ? -((days.length + 1) ** 3) : 2 * k + 1);
+    for (let k = 0; k < Math.min(days.length, maxHomeDays); k++) addEdge(teamStart + j, sink, (k === 0 ? -((days.length + 1) ** 3) : 2 * k + 1)*homeWeight);
   }
   for (let flow = 0; flow < days.length; flow++) {
     const distance = Array(graph.length).fill(Infinity);
@@ -51,5 +57,23 @@ export function balanceHosts(schedule: Schedule, input: SeasonInput, maxHomeDays
       edge.capacity--; graph[node][edge.reverse].capacity++; node = step.node;
     }
   }
-  return Object.fromEntries(days.map(([dateId, day], i) => [dateId, { ...day, hostId: choices[i].find(choice => choice.edge.capacity === 0)!.teamId }]));
+  const balanced: Schedule = Object.fromEntries(days.map(([dateId, day], i) => [dateId, { ...day, hostId: choices[i].find(choice => choice.edge.capacity === 0)!.teamId }]));
+  // Swapping hosts preserves every team's home-day count and all hard rules.
+  // Improve the variety of visits first, then total kilometres, with bounded work.
+  let best=seasonTravel(balanced,input.teams,input);
+  let checked=0;
+  for(let pass=0;pass<3;pass++) {
+    let changed=false;
+    for(let i=0;i<days.length;i++)for(let j=i+1;j<days.length;j++) {
+      if(++checked>2000)return balanced;
+      const a=balanced[days[i][0]], b=balanced[days[j][0]];
+      if(a.hostId===b.hostId||!eligible[i].includes(b.hostId)||!eligible[j].includes(a.hostId))continue;
+      [a.hostId,b.hostId]=[b.hostId,a.hostId];
+      const candidate=seasonTravel(balanced,input.teams,input);
+      if(candidate.missingVisits<best.missingVisits||candidate.missingVisits===best.missingVisits&&candidate.unknownTrips===best.unknownTrips&&candidate.totalKm<best.totalKm-0.000001){best=candidate;changed=true;}
+      else [a.hostId,b.hostId]=[b.hostId,a.hostId];
+    }
+    if(!changed)break;
+  }
+  return balanced;
 }

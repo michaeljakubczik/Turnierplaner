@@ -1,3 +1,4 @@
+import { seasonTravel } from '../lib/seasonTravel';
 import { teamDayCounts } from '../lib/seasonSpacing';
 import { weekendSlots } from '../lib/weekendCalendar';
 import { matchOrdinals } from '../lib/orderDayMatches';
@@ -96,13 +97,14 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const [planView, setPlanView] = useState<'best' | 'favorites' | 'all'>(project.selectedId ? 'all' : 'best');
   const currentKey = draftKey(draft);
   const currentSeasonDates = seasonInput(draft).seasonDates;
-  const currentPlans = project.plans.filter(p => draftKey(p.draft) === currentKey).sort((a,b)=>comparePlans(a,b,draft.teams,currentSeasonDates));
+  const currentPlans = project.plans.filter(p => draftKey(p.draft) === currentKey).sort((a,b)=>comparePlans(a,b,draft.teams,currentSeasonDates,draft));
   const alternatives = planView === 'favorites' ? project.plans.filter(p=>p.favorite) : planView === 'all' ? [...currentPlans, ...project.plans.filter(p=>draftKey(p.draft)!==currentKey)] : currentPlans.slice(0,12);
   const selected = alternatives.find(p=>p.id===project.selectedId) || alternatives[0];
   const selectedPlan = selected ? alternatives.indexOf(selected) : 0;
   const schedule = selected?.schedule ?? null;
   const report = selected?.report ?? null;
   const resultTeams = selected?.draft.teams ?? draft.teams;
+  const resultTravel = schedule ? seasonTravel(schedule,resultTeams,selected?.draft ?? draft) : null;
   const resultTeamDays = schedule ? teamDayCounts(schedule,resultTeams) : {};
   const resultDates = [...(selected?.draft.dates ?? draft.dates)].sort((a,b)=>a.value.localeCompare(b.value));
   const isOldPlan = !!selected && draftKey(selected.draft) !== currentKey;
@@ -396,7 +398,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
         setProject(prev => {
           const plans = mergePlans(prev.plans, result.alternatives, draft);
           const known = new Set([...(prev.seen[currentKey] || []), ...(result.foundSignatures || result.alternatives.map(p=>scheduleSignature(p.schedule)))]);
-          const added = plans.filter(p=>draftKey(p.draft)===currentKey).sort((a,b)=>comparePlans(a,b,draft.teams,currentSeasonDates));
+          const added = plans.filter(p=>draftKey(p.draft)===currentKey).sort((a,b)=>comparePlans(a,b,draft.teams,currentSeasonDates,draft));
           return {...prev, plans, seen: {...prev.seen,[currentKey]:[...known]}, selectedId: prev.plans.some(p=>p.id===prev.selectedId&&draftKey(p.draft)===currentKey) ? prev.selectedId : added[0]?.id ?? prev.selectedId};
         });
         setPlanView('best'); setError(result.alternatives.length ? null : currentPlans.length ? 'Keine zusätzlichen Pläne in diesem Suchlauf gefunden. Gespeicherte Pläne bleiben erhalten.' : result.error); setTips(currentPlans.length ? [] : result.tips || []);
@@ -443,7 +445,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     const worksheet = XLSX.utils.json_to_sheet(data);
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Spielplan");
-    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(resultTeams.map(t=>({Team:t.name,"Spieltage insgesamt":resultTeamDays[t.id]||0,"Davon Heimspieltage":report?.homeGameDistribution[t.id]||0}))), "Teamübersicht");
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(resultTeams.map(t=>({Team:t.name,"Spieltage insgesamt":resultTeamDays[t.id]||0,"Davon Heimspieltage":report?.homeGameDistribution[t.id]||0,"Anreise km (Hin und zurück)":Math.round(resultTravel?.byTeam[t.id].km||0),"Fehlende Entfernungen":resultTravel?.byTeam[t.id].unknownTrips||0,"Davon Tage mit Luftlinien-Schätzung":resultTravel?.byTeam[t.id].airTrips||0,"Noch ohne Besuch bei":resultTravel?.byTeam[t.id].missingHosts.map(id=>resultTeams.find(t=>t.id===id)!.name).join(", ")||""}))), "Teamübersicht");
+    if(resultTravel) XLSX.utils.book_append_sheet(workbook,XLSX.utils.json_to_sheet(resultTeams.flatMap(t=>resultTeams.filter(h=>h.id!==t.id).map(h=>({Team:t.name,Gastgeber:h.name,"Auswärtsspieltage":resultTravel.byTeam[t.id].visits[h.id]||0})))),"Gastgeberbesuche");
     
     const max_width = data.reduce((w, r) => Math.max(w, r['Team A'].length, r['Team B'].length), 10);
     worksheet["!cols"] = [
@@ -709,7 +712,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               {schedule && report && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
                   <div className="glass-card rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-                    <div><p className="text-xs text-gray-400">{(project.seen[currentKey] || []).length} unterschiedliche Pläne für aktuelle Eingaben gefunden · {project.plans.length} Pläne gespeichert</p><p className="font-bold">{alternatives.length} {alternatives.length === 1 ? 'Spielplan' : 'alternative Spielpläne'} zur Auswahl</p><p className="text-xs text-gray-400">Rangfolge: Heimspielverteilung → wenige Spieltage → zeitliche Verteilung → gleiche Tages-Spielnummern → Anreisetage und Auslastung.</p></div>
+                    <div><p className="text-xs text-gray-400">{(project.seen[currentKey] || []).length} unterschiedliche Pläne für aktuelle Eingaben gefunden · {project.plans.length} Pläne gespeichert</p><p className="font-bold">{alternatives.length} {alternatives.length === 1 ? 'Spielplan' : 'alternative Spielpläne'} zur Auswahl</p><p className="text-xs text-gray-400">Rangfolge: Heimspielverteilung → wenige Spieltage → Besuche bei allen Gastgebern → Gesamtkilometer → zeitliche Verteilung → Tages-Spielnummern → Auslastung.</p></div>
                     <div className="flex items-center gap-3">
                       <button aria-label="Vorheriger Spielplan" disabled={selectedPlan === 0} onClick={() => selectPlan(selectedPlan - 1)} className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-30">←</button>
                       <span aria-live="polite">Plan {selectedPlan + 1} / {alternatives.length}</span>
@@ -723,6 +726,11 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                       <p className="w-full text-xs text-gray-400">Eine vollständige Suche oder globale Bestlösung wird nicht garantiert. Alle gespeicherten Pläne bleiben erhalten.</p>
                     </div>
                     <div className="w-full flex flex-wrap gap-2">{resultTeams.map(t => <span key={t.id} className="text-xs rounded bg-white/5 px-2 py-1">{t.name}: {resultTeamDays[t.id] || 0} Spieltage insgesamt · {report.homeGameDistribution[t.id] || 0} davon Heimspieltage</span>)}</div>
+                    {resultTravel && <div className="w-full space-y-2 text-xs">
+                      <p className="font-medium">Anreise über die Saison · Hin- und Rückfahrt: {resultTravel.totalKm.toLocaleString('de-DE',{maximumFractionDigits:0})} km insgesamt{resultTravel.unknownTrips>0?' (unvollständig)':''}</p>
+                      <div className="flex flex-wrap gap-2">{resultTeams.map(t=>{const row=resultTravel.byTeam[t.id];return <div key={t.id} className="rounded bg-white/5 px-2 py-1"><p>{t.name}: {row.km.toLocaleString('de-DE',{maximumFractionDigits:0})} km{row.unknownTrips>0?' + unbekannte Strecken':''}</p><p className="text-gray-400">Besucht: {resultTeams.length-1-row.missingHosts.length}/{resultTeams.length-1} Gastgeber{row.missingHosts.length>0?` · Noch ohne Besuch: ${row.missingHosts.map(id=>resultTeams.find(t=>t.id===id)!.name).join(', ')}`:''}</p><p className="text-gray-400">{Object.entries(row.visits).map(([id,n])=>`${resultTeams.find(t=>t.id===id)!.name}: ${n}×`).join(" · ")||"Keine Auswärtsspieltage"}</p></div>})}</div>
+                      <p className="text-gray-400">Pro Auswärtsspieltag eine Hin- und Rückfahrt, unabhängig von der Spielezahl. Eingetragene Wegstrecken haben Vorrang; sonst dient die Luftlinie als Schätzung. Heimspieltage zählen mit 0 km. Fehlende Gastgeberbesuche verhindern keinen gültigen Plan.</p>
+                    </div>}
                   </div>
                   <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
                     {[
@@ -878,7 +886,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               <h3 className="mb-1 font-medium">Weiche Bedingungen · werden möglichst gut erfüllt</h3>
               <ul className="list-disc space-y-1 pl-4">
                 <li>Möglichst gleichmäßige Heimspielverteilung im Rahmen der Verfügbarkeiten. Fehlende Heimspielmöglichkeiten verhindern einen ansonsten gültigen Plan nicht.</li>
-                <li>Danach möglichst wenige Spieltage und eine gleichmäßige zeitliche Verteilung über die Saison – für die Liga und jedes Team. Häufungen an aufeinanderfolgenden Wochenenden bleiben erlaubt, wenn die Termine es erfordern.</li>
+                <li>Danach möglichst wenige Spieltage. Anschließend möglichst mindestens ein Besuch jedes Teams bei jedem anderen Gastgeber und eine möglichst kurze gesamte Hin- und Rückfahrt über die Saison. Danach eine gleichmäßige zeitliche Verteilung über die Saison – für die Liga und jedes Team. Häufungen an aufeinanderfolgenden Wochenenden bleiben erlaubt, wenn die Termine es erfordern.</li>
                 <li>Möglichst gleiche Tages-Spielnummern der Gegner: erstes gegen erstes, zweites gegen zweites, drittes gegen drittes Spiel.</li>
                 <li>Danach möglichst wenige Anreisetage und einzelne Spiele pro Team; bevorzugt mindestens drei Spiele je Spieltag und eine ausgeglichene Tagesauslastung.</li>
               </ul>

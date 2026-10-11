@@ -1,3 +1,4 @@
+import { seasonTravel } from './seasonTravel';
 import { teamDailyLimit, teamGameCapacity } from './seasonLimits';
 import { comparePlans, scheduleSignature } from './seasonProject';
 import { analyzeSeason, type PlanningTip } from './planningDiagnostics';
@@ -255,7 +256,12 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         if (dev > 0) softDevs.push(`Der gefundene Plan verteilt die Spiele nicht exakt gleichmäßig.`);
         if (maxTeamMatches >= 3) softDevs.push(`Einige Teams spielen ${maxTeamMatches} Spiele an einem einzigen Tag.`);
         if (searchStopped) softDevs.push(`Der Suchraum war zu groß. Es wird die beste innerhalb der Sicherheitslimits gefundene Lösung angezeigt.`);
-        softDevs.push(`Optimierung: Zuerst gleichmäßig verteilte Heimspieltage, danach möglichst wenige und zeitlich gleichmäßig über die Saison verteilte Spieltage. Anschließend gleiche Tages-Spielnummern sowie wenige Anreisetage und gute Auslastung. Eine globale Bestlösung wird nicht garantiert.`);
+        const travel=seasonTravel(plan,teams,input);
+        for(const team of teams) {
+          const row=travel.byTeam[team.id];
+          if(row.missingHosts.length)softDevs.push(`${team.name}: Kein Besuch bei ${row.missingHosts.map(id=>teams.find(t=>t.id===id)!.name).join(', ')}. Besuche bei allen Gastgebern sind ein weiches Ziel; dieser Plan bleibt gültig.`);
+        }
+        softDevs.push(`Optimierung: Zuerst gleichmäßig verteilte Heimspieltage und möglichst wenige Spieltage. Besuche bei möglichst allen anderen Gastgebern und eine möglichst kurze gesamte Hin- und Rückfahrt haben nach Heimspielverteilung und wenigen Spieltagen Vorrang vor zeitlicher Verteilung, Tages-Spielnummern und Auslastung. Eine globale Bestlösung wird nicht garantiert.`);
         softDevs.push(`Reguläre Spieltage: mindestens zwei Spiele; der Gastgeber spielt mit. Teams mit mehr als 100 km ${input.manualDistances ? 'eingetragener Entfernung (sonst Luftlinie)' : input.distanceMode === 'road' ? 'Straßenentfernung' : 'Luftlinie'} zum Gastgeber spielen mindestens zweimal. Der gemeinsame Saisonabschluss ist von diesen Mindestzahlen ausgenommen.`);
         softDevs.push(`Optimierung: Die Suche bevorzugt eine gleichmäßige Verteilung der Heimspieltage.`);
 
@@ -348,7 +354,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
           seenPlans.add(signature);
           const ordered = Object.fromEntries(Object.entries(balanced).map(([id, day]) => [id, {...day, matches: orderDayMatches(day.matches)}]));
           candidates.push({ schedule: ordered, score: getScore(ordered), spread: Math.max(...homeCounts) - Math.min(...homeCounts), days: Object.keys(ordered).length, signature });
-          candidates.sort((a,b) => comparePlans({schedule:a.schedule,report:null!}, {schedule:b.schedule,report:null!}, teams, dates));
+          candidates.sort((a,b) => comparePlans({schedule:a.schedule,report:null!}, {schedule:b.schedule,report:null!}, teams, dates, input));
           if (candidates.length > MAX_ALTERNATIVES) candidates.pop();
           bestSchedule = candidates[0].schedule; bestDayCount = candidates[0].days;
           if (firstSolutionAt === null) firstSolutionAt = performance.now();
