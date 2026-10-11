@@ -48,3 +48,16 @@ test('visits at every other host are soft and rank ahead of repeated visits with
  const input:SeasonInput={teams:subset,seasonDates:[],availability,homeAvailability:{...availability,c:{}},matchMode:1,maxMatchesPerDay:10,maxMatchesPerTeamPerDay:2,maxTripleDaysPerTeam:0,allTeamsOnFinalDay:false,ignoredLateDates:0};
  const result=balanceHosts(round,input);assert.ok(result);assert.ok(seasonTravel(result,subset).missingVisits>0);
 });
+
+test('a host with two games is preferred without making single-game hosting invalid',async()=>{
+ const subset=teams.slice(0,3), matches=[pair('a','b'),pair('a','c')];
+ const one={day:{hostId:'b',matches}},two={day:{hostId:'a',matches}};
+ assert.ok(comparePlans({schedule:two,report:null!},{schedule:one,report:null!},subset)<0);
+ const availability=Object.fromEntries(subset.map(t=>[t.id,{day:true}]));
+ const input:SeasonInput={teams:subset,seasonDates:[{id:'day',value:'2027-06-05'}],availability,homeAvailability:availability,matchMode:1,maxMatchesPerDay:4,maxMatchesPerTeamPerDay:2,maxTripleDaysPerTeam:0,allTeamsOnFinalDay:false,ignoredLateDates:0};
+ assert.equal(balanceHosts(one,input)!.day.hostId,'a');
+ input.homeAvailability={a:{},b:{day:true},c:{}};
+ assert.equal(balanceHosts(one,input)!.day.hostId,'b');
+ const {hostSingleDays}=await import('./seasonTravel');
+ assert.equal(hostSingleDays(one),1);assert.equal(hostSingleDays(one,'day'),0);
+});

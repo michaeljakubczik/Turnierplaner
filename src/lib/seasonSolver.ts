@@ -1,4 +1,4 @@
-import { seasonTravel } from './seasonTravel';
+import { seasonTravel, hostSingleDays } from './seasonTravel';
 import { teamDailyLimit, teamGameCapacity } from './seasonLimits';
 import { comparePlans, scheduleSignature } from './seasonProject';
 import { analyzeSeason, type PlanningTip } from './planningDiagnostics';
@@ -261,7 +261,9 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
           const row=travel.byTeam[team.id];
           if(row.missingHosts.length)softDevs.push(`${team.name}: Kein Besuch bei ${row.missingHosts.map(id=>teams.find(t=>t.id===id)!.name).join(', ')}. Besuche bei allen Gastgebern sind ein weiches Ziel; dieser Plan bleibt gültig.`);
         }
-        softDevs.push(`Optimierung: Zuerst gleichmäßig verteilte Heimspieltage und möglichst wenige Spieltage. Besuche bei möglichst allen anderen Gastgebern und eine möglichst kurze gesamte Hin- und Rückfahrt haben nach Heimspielverteilung und wenigen Spieltagen Vorrang vor zeitlicher Verteilung, Tages-Spielnummern und Auslastung. Eine globale Bestlösung wird nicht garantiert.`);
+        const singleHosts=hostSingleDays(plan,allTeamsOnFinalDay?finalDateId:undefined);
+        if(singleHosts)softDevs.push(`An ${singleHosts} regulären Spieltagen hat der Gastgeber nur ein Spiel. Zwei oder mehr werden bevorzugt; ein Spiel bleibt erlaubt.`);
+        softDevs.push(`Optimierung: Zuerst gleichmäßig verteilte Heimspieltage und möglichst wenige Spieltage. Besuche bei möglichst allen anderen Gastgebern, mindestens zwei Spiele für reguläre Gastgeber und eine möglichst kurze gesamte Hin- und Rückfahrt haben nach Heimspielverteilung und wenigen Spieltagen Vorrang vor zeitlicher Verteilung, Tages-Spielnummern und Auslastung. Eine globale Bestlösung wird nicht garantiert.`);
         softDevs.push(`Reguläre Spieltage: mindestens zwei Spiele; der Gastgeber spielt mit. Teams mit mehr als 100 km ${input.manualDistances ? 'eingetragener Entfernung (sonst Luftlinie)' : input.distanceMode === 'road' ? 'Straßenentfernung' : 'Luftlinie'} zum Gastgeber spielen mindestens zweimal. Der gemeinsame Saisonabschluss ist von diesen Mindestzahlen ausgenommen.`);
         softDevs.push(`Optimierung: Die Suche bevorzugt eine gleichmäßige Verteilung der Heimspieltage.`);
 

@@ -725,7 +725,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               {schedule && report && (
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
                   <div className="glass-card rounded-xl p-4 flex flex-wrap items-center justify-between gap-3">
-                    <div><p className="text-xs text-gray-400">{(project.seen[currentKey] || []).length} unterschiedliche Pläne für aktuelle Eingaben gefunden · {project.plans.length} Pläne gespeichert</p><p className="font-bold">{alternatives.length} {alternatives.length === 1 ? 'Spielplan' : 'alternative Spielpläne'} zur Auswahl</p><p className="text-xs text-gray-400">Rangfolge: Heimspielverteilung → wenige Spieltage → Besuche bei allen Gastgebern → Gesamtkilometer → zeitliche Verteilung → Tages-Spielnummern → Auslastung.</p></div>
+                    <div><p className="text-xs text-gray-400">{(project.seen[currentKey] || []).length} unterschiedliche Pläne für aktuelle Eingaben gefunden · {project.plans.length} Pläne gespeichert</p><p className="font-bold">{alternatives.length} {alternatives.length === 1 ? 'Spielplan' : 'alternative Spielpläne'} zur Auswahl</p><p className="text-xs text-gray-400">Rangfolge: Heimspielverteilung → wenige Spieltage → Besuche bei allen Gastgebern → Gastgeber mit zwei Spielen → Gesamtkilometer → zeitliche Verteilung → Tages-Spielnummern → Auslastung.</p></div>
                     <div className="flex items-center gap-3">
                       <button aria-label="Vorheriger Spielplan" disabled={selectedPlan === 0} onClick={() => selectPlan(selectedPlan - 1)} className="rounded-lg bg-white/10 px-3 py-2 disabled:opacity-30">←</button>
                       <span aria-live="polite">Plan {selectedPlan + 1} / {alternatives.length}</span>
@@ -741,6 +741,28 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
                   </div>
 
+
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                    {[
+                      { label: 'Spieltage', value: report.matchesPerDay.length },
+                      { label: 'Paarungen', value: (resultTeams.length * (resultTeams.length - 1)) / 2 },
+                      { label: 'Gesamtspiele', value: report.matchesPerDay.reduce((a, b) => a + b, 0) },
+                      { label: 'Ø Spiele/Tag', value: (report.matchesPerDay.reduce((a, b) => a + b, 0) / report.matchesPerDay.length).toFixed(1) },
+                      { label: 'Max Last/Team', value: report.maxMatchesPerTeamPerDay },
+                      { label: 'Bedingungen', value: 'Gültig', color: 'text-emerald-400' }
+                    ].map((stat, i) => (
+                      <div key={i} className="glass-card p-4 rounded-xl space-y-1">
+                        <p className="text-[10px] font-mono uppercase opacity-50">{stat.label}</p>
+                        <p className={`text-2xl font-bold ${stat.color || 'text-white'}`}>{stat.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                    <div className="w-full flex flex-wrap gap-2">{resultTeams.map(t => <span key={t.id} className="text-xs rounded bg-white/5 px-2 py-1">{t.name}: {resultTeamDays[t.id] || 0} Spieltage insgesamt · {report.homeGameDistribution[t.id] || 0} davon Heimspieltage</span>)}</div>
+                    {resultTravel && <div className="w-full space-y-2 text-xs">
+                      <p className="font-medium">Anreise über die Saison · Hin- und Rückfahrt: {resultTravel.totalKm.toLocaleString('de-DE',{maximumFractionDigits:0})} km insgesamt{resultTravel.unknownTrips>0?' (unvollständig)':''}</p>
+                      <div className="flex flex-wrap gap-2">{resultTeams.map(t=>{const row=resultTravel.byTeam[t.id];return <div key={t.id} className="rounded bg-white/5 px-2 py-1"><p>{t.name}: {row.km.toLocaleString('de-DE',{maximumFractionDigits:0})} km{row.unknownTrips>0?' + unbekannte Strecken':''}</p><p className="text-gray-400">Besucht: {resultTeams.length-1-row.missingHosts.length}/{resultTeams.length-1} Gastgeber{row.missingHosts.length>0?` · Noch ohne Besuch: ${row.missingHosts.map(id=>resultTeams.find(t=>t.id===id)!.name).join(', ')}`:''}</p><p className="text-gray-400">{Object.entries(row.visits).map(([id,n])=>`${resultTeams.find(t=>t.id===id)!.name}: ${n}×`).join(" · ")||"Keine Auswärtsspieltage"}</p></div>})}</div>
+                      <p className="text-gray-400">Pro Auswärtsspieltag eine Hin- und Rückfahrt, unabhängig von der Spielezahl. Eingetragene Wegstrecken haben Vorrang; sonst dient die Luftlinie als Schätzung. Heimspieltage zählen mit 0 km. Fehlende Gastgeberbesuche verhindern keinen gültigen Plan.</p>
+                    </div>}
 
                   <div className="space-y-4">
                     <div className="flex items-center justify-between border-b border-white/10 pb-2">
@@ -801,27 +823,6 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                       <BarChart3 size={18} className="text-blue-400" />
                       <h2 className="font-bold text-lg">Validierungs- & Balance-Bericht</h2>
                     </div>
-                  <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-                    {[
-                      { label: 'Spieltage', value: report.matchesPerDay.length },
-                      { label: 'Paarungen', value: (resultTeams.length * (resultTeams.length - 1)) / 2 },
-                      { label: 'Gesamtspiele', value: report.matchesPerDay.reduce((a, b) => a + b, 0) },
-                      { label: 'Ø Spiele/Tag', value: (report.matchesPerDay.reduce((a, b) => a + b, 0) / report.matchesPerDay.length).toFixed(1) },
-                      { label: 'Max Last/Team', value: report.maxMatchesPerTeamPerDay },
-                      { label: 'Bedingungen', value: 'Gültig', color: 'text-emerald-400' }
-                    ].map((stat, i) => (
-                      <div key={i} className="glass-card p-4 rounded-xl space-y-1">
-                        <p className="text-[10px] font-mono uppercase opacity-50">{stat.label}</p>
-                        <p className={`text-2xl font-bold ${stat.color || 'text-white'}`}>{stat.value}</p>
-                      </div>
-                    ))}
-                  </div>
-                    <div className="w-full flex flex-wrap gap-2">{resultTeams.map(t => <span key={t.id} className="text-xs rounded bg-white/5 px-2 py-1">{t.name}: {resultTeamDays[t.id] || 0} Spieltage insgesamt · {report.homeGameDistribution[t.id] || 0} davon Heimspieltage</span>)}</div>
-                    {resultTravel && <div className="w-full space-y-2 text-xs">
-                      <p className="font-medium">Anreise über die Saison · Hin- und Rückfahrt: {resultTravel.totalKm.toLocaleString('de-DE',{maximumFractionDigits:0})} km insgesamt{resultTravel.unknownTrips>0?' (unvollständig)':''}</p>
-                      <div className="flex flex-wrap gap-2">{resultTeams.map(t=>{const row=resultTravel.byTeam[t.id];return <div key={t.id} className="rounded bg-white/5 px-2 py-1"><p>{t.name}: {row.km.toLocaleString('de-DE',{maximumFractionDigits:0})} km{row.unknownTrips>0?' + unbekannte Strecken':''}</p><p className="text-gray-400">Besucht: {resultTeams.length-1-row.missingHosts.length}/{resultTeams.length-1} Gastgeber{row.missingHosts.length>0?` · Noch ohne Besuch: ${row.missingHosts.map(id=>resultTeams.find(t=>t.id===id)!.name).join(', ')}`:''}</p><p className="text-gray-400">{Object.entries(row.visits).map(([id,n])=>`${resultTeams.find(t=>t.id===id)!.name}: ${n}×`).join(" · ")||"Keine Auswärtsspieltage"}</p></div>})}</div>
-                      <p className="text-gray-400">Pro Auswärtsspieltag eine Hin- und Rückfahrt, unabhängig von der Spielezahl. Eingetragene Wegstrecken haben Vorrang; sonst dient die Luftlinie als Schätzung. Heimspieltage zählen mit 0 km. Fehlende Gastgeberbesuche verhindern keinen gültigen Plan.</p>
-                    </div>}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-3">
                         <div className="flex justify-between items-center text-xs">
@@ -900,7 +901,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
               <h3 className="mb-1 font-medium">Weiche Bedingungen · werden möglichst gut erfüllt</h3>
               <ul className="list-disc space-y-1 pl-4">
                 <li>Möglichst gleichmäßige Heimspielverteilung im Rahmen der Verfügbarkeiten. Fehlende Heimspielmöglichkeiten verhindern einen ansonsten gültigen Plan nicht.</li>
-                <li>Danach möglichst wenige Spieltage. Anschließend möglichst mindestens ein Besuch jedes Teams bei jedem anderen Gastgeber und eine möglichst kurze gesamte Hin- und Rückfahrt über die Saison. Danach eine gleichmäßige zeitliche Verteilung über die Saison – für die Liga und jedes Team. Häufungen an aufeinanderfolgenden Wochenenden bleiben erlaubt, wenn die Termine es erfordern.</li>
+                <li>Danach möglichst wenige Spieltage. Anschließend möglichst mindestens ein Besuch jedes Teams bei jedem anderen Gastgeber und möglichst mindestens zwei Spiele für den Gastgeber an regulären Heimspieltagen (ein Spiel bleibt erlaubt). Anschließend eine möglichst kurze gesamte Hin- und Rückfahrt über die Saison. Danach eine gleichmäßige zeitliche Verteilung über die Saison – für die Liga und jedes Team. Häufungen an aufeinanderfolgenden Wochenenden bleiben erlaubt, wenn die Termine es erfordern.</li>
                 <li>Möglichst gleiche Tages-Spielnummern der Gegner: erstes gegen erstes, zweites gegen zweites, drittes gegen drittes Spiel.</li>
                 <li>Danach möglichst wenige Anreisetage und einzelne Spiele pro Team; bevorzugt mindestens drei Spiele je Spieltag und eine ausgeglichene Tagesauslastung.</li>
               </ul>

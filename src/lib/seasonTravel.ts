@@ -20,3 +20,8 @@ export function seasonTravel(schedule: Schedule, teams: Team[], input: TravelInp
   const rows=Object.values(byTeam);
   return {byTeam,totalKm:rows.reduce((sum,r)=>sum+r.km,0),missingVisits:rows.reduce((sum,r)=>sum+r.missingHosts.length,0),unknownTrips:rows.reduce((sum,r)=>sum+r.unknownTrips,0)};
 }
+
+// The shared finale deliberately has one game per host and is excluded.
+export function hostSingleDays(schedule: Schedule, finalDateId?: string): number {
+  return Object.entries(schedule).filter(([id,day])=>id!==finalDateId&&day.matches.filter(m=>m.teamA===day.hostId||m.teamB===day.hostId).length===1).length;
+}
