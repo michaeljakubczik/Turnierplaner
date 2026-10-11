@@ -1,3 +1,4 @@
+import { teamDailyLimit, teamGameCapacity } from './seasonLimits';
 import { comparePlans, scheduleSignature } from './seasonProject';
 import { analyzeSeason, type PlanningTip } from './planningDiagnostics';
 import { orderDayMatches, matchOrdinals } from './orderDayMatches';
@@ -78,6 +79,7 @@ const generatePairings = (teams: Team[], mode: MatchMode): Match[] => {
 
 export function solveSeason(input: SeasonInput, options: SearchOptions, onProgress: (progress: SearchProgress) => void = () => {}): SolverResult {
   const { teams, seasonDates, availability, homeAvailability, matchMode, maxMatchesPerDay, maxMatchesPerTeamPerDay, maxTripleDaysPerTeam, allTeamsOnFinalDay, finalDayCandidate, ignoredLateDates } = input;
+  const dailyTeamLimit = teamDailyLimit(input);
   const result: SolverResult = { tips: [], alternatives: [], error: null, schedule: null, report: null, searchStopped: false };
   const setError = (error: string) => { result.error = error; };
   const setSchedule = (schedule: Schedule) => { result.schedule = schedule; };
@@ -124,8 +126,8 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         const finalDays=allTeamsOnFinalDay?1:0;
         const regularDays=input.maxDaysPerTeam-finalDays;
         const requiredPerTeam=(teams.length-1)*matchMode;
-        const capacityPerTeam=regularDays*Math.min(maxMatchesPerTeamPerDay,2)+(maxMatchesPerTeamPerDay>=3?Math.min(regularDays,maxTripleDaysPerTeam):0)+finalDays;
-        if(capacityPerTeam<requiredPerTeam){setError(`Spieltaglimit pro Team zu niedrig: Jedes Team benötigt ${requiredPerTeam} Spiele, kann an höchstens ${input.maxDaysPerTeam} eigenen Spieltagen aber nur ${capacityPerTeam} bestreiten. Erhöhe „Maximale Spieltage pro Team“ oder passe die Spielelimits an. Der gemeinsame Abschluss zählt bei jedem Team mit.`);return;}
+        const capacityPerTeam=teamGameCapacity(input,regularDays,finalDays);
+        if(capacityPerTeam<requiredPerTeam){setError(`Spieltaglimit pro Team zu niedrig: Jedes Team benötigt ${requiredPerTeam} Spiele, kann an höchstens ${input.maxDaysPerTeam} eigenen Spieltagen aber nur ${capacityPerTeam} bestreiten. Erhöhe „Maximale Spieltage pro Team“ oder passe die Spielelimits an. ${allTeamsOnFinalDay ? "Am gemeinsamen Abschluss ist genau ein Spiel pro Team erlaubt; dieser Tag zählt mit." : "Drei-Spiele-Ausnahmen zählen nur an regulären Tagen und innerhalb des gesamten Tageslimits."}`);return;}
       }
 
 
@@ -181,7 +183,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
 
           Object.values(teamCounts).forEach(c => {
             if (c === 1 && !(allTeamsOnFinalDay && d.id === finalDateId)) penalty += 250;
-            if (c > maxMatchesPerTeamPerDay) penalty += 10000; // Hard constraint penalty
+            if (c > dailyTeamLimit) penalty += 10000; // Hard constraint penalty
           });
         });
 
@@ -289,7 +291,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
         for (const id of [match.teamA, match.teamB]) {
           const c = count(id);
           if(c===0 && input.maxDaysPerTeam!==undefined && Object.values(current).filter(d=>d.matches.some(m=>m.teamA===id||m.teamB===id)).length>=input.maxDaysPerTeam) return [];
-          if (c >= maxMatchesPerTeamPerDay || (allTeamsOnFinalDay && date.id === finalDateId && c >= 1)) return [];
+          if (c >= dailyTeamLimit || (allTeamsOnFinalDay && date.id === finalDateId && c >= 1)) return [];
           const tripleDays = Object.entries(current).filter(([d, entry]) => d !== date.id && entry.matches.filter(m => m.teamA === id || m.teamB === id).length === 3).length;
           if (c === 2 && tripleDays >= maxTripleDaysPerTeam) return [];
         }
@@ -364,7 +366,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
             if (!input.allowRepeatPairPerDay && day.matches.some(existing => existing.teamA === m.teamA && existing.teamB === m.teamB)) return false;
             return [m.teamA, m.teamB].every(teamId => {
               const c = count(teamId);
-              if (c >= maxMatchesPerTeamPerDay) return false;
+              if (c >= dailyTeamLimit) return false;
               const triples = Object.entries(current).filter(([d, entry]) => d !== dateId && entry.matches.filter(game => game.teamA === teamId || game.teamB === teamId).length === 3).length;
               return c !== 2 || triples < maxTripleDaysPerTeam;
             });

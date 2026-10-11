@@ -1,3 +1,4 @@
+import { teamDailyLimit, teamGameCapacity } from './seasonLimits';
 import type { SeasonInput } from './seasonSolver';
 export type PlanningTip = { title: string; detail: string; proven: boolean };
 const label = (value: string) => new Date(value + 'T12:00:00').toLocaleDateString('de-DE');
@@ -11,7 +12,7 @@ export function analyzeSeason(input: SeasonInput): PlanningTip[] {
     if (!team.homePlace && !(finale && teams.length === 2 && mode === 1)) add(`Heimspielort für ${team.name} bestätigen`, 'Einen gefundenen Ort auswählen, damit die automatische 100-km-Regel geprüft werden kann.', true);
     const available = dates.filter(d => av[team.id]?.[d.id]);
     const regular = available.filter(d => !finale || d.id !== final?.id).length;
-    const capacity = regular * Math.min(teamMax, 2) + (teamMax >= 3 ? Math.min(regular, triples) : 0) + (finale && available.some(d => d.id === final?.id) ? 1 : 0);
+    const capacity = teamGameCapacity(input,regular,finale && available.some(d => d.id === final?.id) ? 1 : 0);
     if (capacity < required) add(`${team.name}: zu wenig Spielmöglichkeiten`, `${required} Spiele benötigt, höchstens ${capacity} mit den eingetragenen Terminen und Team-Limits möglich. Bei ${team.name} zusätzliche Termine anfragen oder das Tageslimit bzw. erlaubte Drei-Spiele-Tage prüfen.`, true);
     const tightPartners = teams.filter(other => other.id !== team.id && dates.filter(d => av[team.id]?.[d.id] && av[other.id]?.[d.id]).length === mode);
     if (!input.allowRepeatPairPerDay && tightPartners.length) add(`${team.name}: kaum Terminspielraum`, `Mit ${tightPartners.slice(0, 3).map(t => t.name).join(', ')} gibt es jeweils genau ${mode} gemeinsame Termine. Alle werden für diese Paarungen benötigt; zusätzliche gemeinsame Termine würden die Suche entlasten. Bei ${team.name} gezielt nach Alternativen fragen.`);
@@ -33,14 +34,14 @@ export function analyzeSeason(input: SeasonInput): PlanningTip[] {
     const hosts = teams.filter(t => av[t.id]?.[d.id] && hv[t.id]?.[d.id]);
     const capacity = Math.min(n, Math.max(0, ...hosts.map(t => t.maxCapacity)));
     const isFinal = finale && d.id === final?.id;
-    const upper = isFinal ? (capacity >= teams.length ? teams.length / 2 : 0) : capacity >= (input.allowRepeatPairPerDay ? 2 : 3) ? Math.min(dayMax, Math.floor(capacity * teamMax / 2), (input.allowRepeatPairPerDay ? n * (n - 1) / 2 * mode : n * (n - 1) / 2)) : 0;
-    return { d, upper, potential: Math.min(Math.floor(capacity * teamMax / 2), (input.allowRepeatPairPerDay ? n * (n - 1) / 2 * mode : n * (n - 1) / 2)), isFinal };
+    const upper = isFinal ? (capacity >= teams.length ? teams.length / 2 : 0) : capacity >= (input.allowRepeatPairPerDay ? 2 : 3) ? Math.min(dayMax, Math.floor(capacity * teamDailyLimit(input) / 2), (input.allowRepeatPairPerDay ? n * (n - 1) / 2 * mode : n * (n - 1) / 2)) : 0;
+    return { d, upper, potential: Math.min(Math.floor(capacity * teamDailyLimit(input) / 2), (input.allowRepeatPairPerDay ? n * (n - 1) / 2 * mode : n * (n - 1) / 2)), isFinal };
   });
   const total = teams.length * required / 2;
   if(input.maxDaysPerTeam!==undefined) {
     const finalDays=finale?1:0;
     const regularDays=input.maxDaysPerTeam-finalDays;
-    const capacity=regularDays*Math.min(teamMax,2)+(teamMax>=3?Math.min(regularDays,triples):0)+finalDays;
+    const capacity=teamGameCapacity(input,regularDays,finalDays);
     add('Spieltaglimit pro Team prüfen', `Jedes Team darf höchstens ${input.maxDaysPerTeam} eigene Spieltage einschließlich Saisonabschluss haben. ${required} Spiele benötigt, höchstens ${capacity} innerhalb dieses Limits möglich. Limit, Spiele pro Team/Tag und erlaubte Drei-Spiele-Tage prüfen. Die Saison darf insgesamt mehr Spieltage enthalten.`,capacity<required);
   }
   const upper = usable.reduce((sum, d) => sum + d.upper, 0);

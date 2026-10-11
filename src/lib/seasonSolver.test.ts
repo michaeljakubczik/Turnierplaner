@@ -1,3 +1,4 @@
+import { teamDailyLimit } from './seasonLimits';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { solveSeason, type SeasonInput, type SolverResult, type SearchProgress } from './seasonSolver';
@@ -35,7 +36,7 @@ function validate(input: SeasonInput, result: SolverResult) {
     }
     for (const t of input.teams) {
       const count = day.matches.filter(m => m.teamA === t.id || m.teamB === t.id).length;
-      assert.ok(count <= input.maxMatchesPerTeamPerDay);
+      assert.ok(count <= teamDailyLimit(input));
       if (finale) assert.equal(count, 1);
       else if (count && hasLongJourney(t.homePlace!, host.homePlace!)) assert.ok(count >= 2);
     }
@@ -170,7 +171,7 @@ test('finale-only plan does not require locations, and search publishes retained
 });
 
 test('team-day cap permits a season with more dates than any individual team',()=>{
- const input=fixture(5,4);input.maxMatchesPerDay=3;input.maxMatchesPerTeamPerDay=2;input.maxDaysPerTeam=3;
+ const input=fixture(5,4);input.maxTripleDaysPerTeam=0;input.maxMatchesPerDay=3;input.maxMatchesPerTeamPerDay=2;input.maxDaysPerTeam=3;
  const result=solveSeason(input,{durationMs:1000});validate(input,result);assert.ok(Object.keys(result.schedule!).length>3);
  for(const team of input.teams)assert.ok(Object.values(result.schedule!).filter(day=>day.matches.some(m=>m.teamA===team.id||m.teamB===team.id)).length<=3);
  input.maxDaysPerTeam=1;assert.match(solveSeason(input,{durationMs:100}).error!,/Spieltaglimit pro Team zu niedrig/);
@@ -182,4 +183,16 @@ test('the shared season finale counts towards each team day cap',()=>{
  input.maxDaysPerTeam=3;const result=solveSeason(input,{durationMs:300});validate(input,result);
  assert.ok(result.schedule![input.finalDayCandidate!.id]);
  for(const team of input.teams)assert.ok(Object.values(result.schedule!).filter(day=>day.matches.some(m=>m.teamA===team.id||m.teamB===team.id)).length<=3);
+});
+
+test('two-game daily limit permits budgeted three-game exceptions and their project round-trip',async()=>{
+  const input=fixture(4,3,2,true);input.maxMatchesPerTeamPerDay=2;input.maxTripleDaysPerTeam=1;input.maxDaysPerTeam=3;
+  const result=solveSeason(input,{durationMs:1000,seed:1});validate(input,result);
+  assert.ok(Object.values(result.schedule!).some(d=>input.teams.some(t=>d.matches.filter(m=>m.teamA===t.id||m.teamB===t.id).length===3)));
+  const {emptyProject,mergePlans,parseProject}=await import('./seasonProject');
+  const d={...input,dates:input.seasonDates};const project=emptyProject(d);project.plans=mergePlans([],result.alternatives,d);
+  assert.deepEqual(parseProject(JSON.parse(JSON.stringify(project))),project);
+  const invalid=structuredClone(project);invalid.plans[0].draft.maxTripleDaysPerTeam=0;assert.throws(()=>parseProject(invalid));
+  input.maxTripleDaysPerTeam=0;assert.match(solveSeason(input,{durationMs:100}).error!,/nur 5 bestreiten/);
+  input.maxTripleDaysPerTeam=1;input.maxMatchesPerTeamPerDay=1;assert.match(solveSeason(input,{durationMs:100}).error!,/nur 3 bestreiten/);
 });

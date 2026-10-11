@@ -1,3 +1,4 @@
+import { teamDailyLimit } from './seasonLimits';
 import { seasonSpacingPenalty } from './seasonSpacing';
 import type { Availability, DateEntry, HomeAvailability, MatchMode, PlanAlternative, Schedule, SeasonInput, Team } from './seasonSolver';
 import { journeyKm, type RoadDistances, type ManualDistances } from './teamTravel';
@@ -74,7 +75,7 @@ function validPlan(x: unknown): x is SavedPlan {
     }
     if(!counts[host.id]||Object.keys(counts).length>host.maxCapacity)return false;home[host.id]=(home[host.id]||0)+1;
     for(const t of input.teams) {
-      const n=counts[t.id]||0;if(!final&&!t.homePlace||n>input.maxMatchesPerTeamPerDay||final&&n!==1||!final&&n>0&&(journeyKm(t,host,input) ?? Infinity) > 100&&n<2)return false;
+      const n=counts[t.id]||0;if(!final&&!t.homePlace||n>teamDailyLimit(input)||final&&n!==1||!final&&n>0&&(journeyKm(t,host,input) ?? Infinity) > 100&&n<2)return false;
       if(n===3)triples[t.id]=(triples[t.id]||0)+1;
     }
   }

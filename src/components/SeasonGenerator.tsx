@@ -538,7 +538,11 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                   <input type="range" min="1" max="3" value={maxMatchesPerTeamPerDay} onChange={(e) => setMaxMatchesPerTeamPerDay(parseInt(e.target.value))} className="flex-1 accent-blue-500 cursor-pointer" />
                   <span className="font-mono font-bold text-lg w-8 text-center text-blue-400">{maxMatchesPerTeamPerDay}</span>
                 </div>
-                <p className="text-[10px] opacity-50 font-mono uppercase">Maximale Anzahl an Spielen pro Team an einem Tag.</p>
+                <p className="text-[10px] opacity-50 font-mono uppercase">Reguläres Tageslimit; Drei-Spiele-Ausnahmen siehe unten.</p>
+                <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
+                  <input aria-label="Maximale Drei-Spiele-Tage" type="number" min="0" max="1000" step="1" disabled={maxMatchesPerTeamPerDay<2} value={maxTripleDaysPerTeam} onChange={e=>{const n=Number(e.target.value);if(Number.isInteger(n)&&n>=0&&n<=1000)setDraft(prev=>({...prev,maxTripleDaysPerTeam:n}));}} className="ml-3 w-16 bg-white/10 rounded p-2 disabled:opacity-40" />
+                  <span className="block text-xs text-gray-400 mt-2">{maxMatchesPerTeamPerDay<2?'Bei Tageslimit 1 sind keine Drei-Spiele-Ausnahmen möglich.':`Bei Tageslimit 2 oder 3: höchstens ${maxTripleDaysPerTeam} Tage mit drei Spielen pro Team; an allen anderen regulären Tagen höchstens zwei. 0 = keine Ausnahmen.`} Das gesamte Tageslimit gilt weiterhin; am gemeinsamen Saisonabschluss bleibt es bei genau einem Spiel pro Team.</span>
+                </label>
               </div>
             <div className="space-y-4">
               <div className="flex items-center gap-2 border-b border-white/10 pb-2">
@@ -553,10 +557,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             </div>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={draft.allowRepeatPairPerDay ?? false} onChange={e=>setDraft(prev=>({...prev,allowRepeatPairPerDay:e.target.checked}))} /><span>Rückspiele am selben Tag erlauben</span></label>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag: genau ein Spiel pro Team<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
-            <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
-              <input aria-label="Maximale Drei-Spiele-Tage" type="number" min="0" max="100" value={maxTripleDaysPerTeam} onChange={e => setDraft(prev => ({ ...prev, maxTripleDaysPerTeam: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))} className="ml-3 w-16 bg-white/10 rounded p-2" />
-              <span className="block text-xs text-gray-400 mt-2">0 = höchstens zwei Spiele pro Tag. Drei Spiele sind nur bei Tageslimit 3 erlaubt.</span>
-            </label>
+
           </section>
 
           {/* Teams */}
@@ -867,7 +868,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 <li>Alle Paarungen finden genau so oft statt, wie im Spielmodus gewählt.</li>
                 <li>Spiele nur an ausgewählten Terminen und mit verfügbaren Teams. Nicht jeder Termin muss genutzt werden.</li>
                 <li>Ein verfügbarer Gastgeber mit Heimspielmöglichkeit und ausreichender Teamkapazität pro Spieltag; er spielt mindestens einmal mit.</li>
-                <li>Die eingestellten Grenzen für Spiele pro Tag, pro Team, Drei-Spiele-Tage und die optionale maximale Zahl an Spieltagen pro Team werden eingehalten. Der Saisonabschluss zählt als Spieltag mit.</li>
+                <li>Das reguläre Team-Tageslimit gilt mit den eingestellten Drei-Spiele-Ausnahmen bei Tageslimit 2 oder 3; Tageslimit 1 bleibt strikt. Das Gesamtlimit für Spiele pro Tag und die optionale maximale Zahl an Spieltagen pro Team werden eingehalten. Der Saisonabschluss zählt als Spieltag mit.</li>
                 <li>Reguläre Spieltage enthalten mindestens zwei Spiele. Gäste mit mehr als 100 km Anreise spielen mindestens zweimal; eingetragene Wegstrecken ersetzen dabei die Luftlinie.</li>
                 <li>Pro Teampaar höchstens ein Spiel je Tag, außer „Rückspiele am selben Tag erlauben“ ist aktiviert.</li>
                 <li>Bei gemeinsamem Saisonabschluss: alle Teams mit genau einem Spiel am letzten gemeinsam verfügbaren Termin. Gerade Teamzahl und ausreichende Gastgeber- und Spielkapazität sind nötig; spätere Termine entfallen. Dieser Abschluss ist von den Mindestzahlen für Spiele und weite Anreisen ausgenommen.</li>
