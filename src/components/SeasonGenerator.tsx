@@ -842,6 +842,33 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             </AnimatePresence>
           </section>
         </div>
+        <aside aria-labelledby="planning-rules-title" className="rounded-xl border border-white/5 bg-white/[0.02] p-4 text-xs leading-relaxed text-gray-400">
+          <h2 id="planning-rules-title" className="mb-3 text-xs font-medium">Planungsbedingungen · zur Information</h2>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <h3 className="mb-1 font-medium">Harte Bedingungen · müssen erfüllt sein</h3>
+              <ul className="list-disc space-y-1 pl-4">
+                <li>Alle Paarungen finden genau so oft statt, wie im Spielmodus gewählt.</li>
+                <li>Spiele nur an ausgewählten Terminen und mit verfügbaren Teams. Nicht jeder Termin muss genutzt werden.</li>
+                <li>Ein verfügbarer Gastgeber mit Heimspielmöglichkeit und ausreichender Teamkapazität pro Spieltag; er spielt mindestens einmal mit.</li>
+                <li>Die eingestellten Grenzen für Spiele pro Tag, pro Team und für Drei-Spiele-Tage werden eingehalten.</li>
+                <li>Reguläre Spieltage enthalten mindestens zwei Spiele. Gäste mit mehr als 100 km Anreise spielen mindestens zweimal; eingetragene Wegstrecken ersetzen dabei die Luftlinie.</li>
+                <li>Pro Teampaar höchstens ein Spiel je Tag, außer „Rückspiele am selben Tag erlauben“ ist aktiviert.</li>
+                <li>Bei gemeinsamem Saisonabschluss: alle Teams mit genau einem Spiel am letzten gemeinsam verfügbaren Termin. Gerade Teamzahl und ausreichende Gastgeber- und Spielkapazität sind nötig; spätere Termine entfallen. Dieser Abschluss ist von den Mindestzahlen für Spiele und weite Anreisen ausgenommen.</li>
+              </ul>
+            </div>
+            <div>
+              <h3 className="mb-1 font-medium">Weiche Bedingungen · werden möglichst gut erfüllt</h3>
+              <ul className="list-disc space-y-1 pl-4">
+                <li>Möglichst gleichmäßige Heimspielverteilung im Rahmen der Verfügbarkeiten. Fehlende Heimspielmöglichkeiten verhindern einen ansonsten gültigen Plan nicht.</li>
+                <li>Danach möglichst wenige Spieltage.</li>
+                <li>Möglichst gleiche Tages-Spielnummern der Gegner: erstes gegen erstes, zweites gegen zweites, drittes gegen drittes Spiel.</li>
+                <li>Danach möglichst wenige Anreisetage und einzelne Spiele pro Team; bevorzugt mindestens drei Spiele je Spieltag und eine ausgeglichene Tagesauslastung.</li>
+              </ul>
+              <p className="mt-2">Diese Ziele bestimmen die Rangfolge der gefundenen Pläne. Eine Abweichung ist kein Ausschlussgrund; eine globale Bestlösung wird nicht garantiert.</p>
+            </div>
+          </div>
+        </aside>
       </main>
 
       <dialog ref={distanceDialog} aria-labelledby="distance-dialog-title" onCancel={()=>setDistanceMenuOpen(false)} onClose={()=>setDistanceMenuOpen(false)} className="m-auto bg-gray-900 text-white rounded-2xl p-5 w-[min(95vw,640px)] max-h-[85vh] backdrop:bg-black/70">
