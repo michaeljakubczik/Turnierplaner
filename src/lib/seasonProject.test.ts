@@ -47,3 +47,11 @@ test('backup preserves manual pair distances and accepts formerly excluded host 
  d.homeAvailability=Object.fromEntries(d.teams.map(t=>[t.id,t.id===a.id?structuredClone(d.availability[a.id]):{}]));
  const r=solveSeason(seasonInput(d),{durationMs:300});assert.ok(r.schedule,r.error||'');const project=emptyProject(d);project.plans=mergePlans([],r.alternatives,d);assert.ok(parseProject(JSON.parse(JSON.stringify(project))).plans.length);
 });
+
+test('season-day limit survives backups and imported plans must obey it',()=>{
+ const d=draft();d.matchMode=2;d.maxSeasonDays=2;
+ const r=solveSeason(seasonInput(d),{durationMs:100});assert.ok(r.schedule,r.error||'');const p=emptyProject(d);p.plans=mergePlans([],r.alternatives,d);
+ assert.equal(parseProject(JSON.parse(JSON.stringify(p))).draft.maxSeasonDays,2);
+ const invalid=structuredClone(p);invalid.plans[0].draft.maxSeasonDays=1;assert.throws(()=>parseProject(invalid));
+ const bad=structuredClone(p);bad.draft.maxSeasonDays=0;assert.throws(()=>parseProject(bad));
+});

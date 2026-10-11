@@ -37,6 +37,11 @@ export function analyzeSeason(input: SeasonInput): PlanningTip[] {
     return { d, upper, potential: Math.min(Math.floor(capacity * teamMax / 2), (input.allowRepeatPairPerDay ? n * (n - 1) / 2 * mode : n * (n - 1) / 2)), isFinal };
   });
   const total = teams.length * required / 2;
+  if(input.maxSeasonDays!==undefined) {
+    const finalDays=finale?1:0;
+    const minimum=finalDays+Math.ceil((total-(finale?teams.length/2:0))/dayMax);
+    add('Spieltaglimit prüfen', `Höchstens ${input.maxSeasonDays} Spieltage einschließlich Saisonabschluss erlaubt. Allein nach der Gesamtspielezahl und dem Spielelimit sind mindestens ${minimum} nötig. Das Limit erhöhen oder die Spielelimits prüfen; Team-Verfügbarkeit und Anreiseregeln können weitere Spieltage erfordern.`,input.maxSeasonDays<minimum);
+  }
   const upper = usable.reduce((sum, d) => sum + d.upper, 0);
   if (upper < total) add('Gesamtkapazität reicht nicht', `Selbst großzügig gerechnet höchstens ${upper} Spiele auf nutzbaren Terminen, benötigt werden ${total}. Zusätzliche gemeinsame Termine, Gastgeberkapazitäten und Spielelimits prüfen. Anreise- und Drei-Spiele-Regeln können die Kapazität weiter verringern.`, true);
   const expandable = usable.filter(d => !d.isFinal && d.potential > dayMax);

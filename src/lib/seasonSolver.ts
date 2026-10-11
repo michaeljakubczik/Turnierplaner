@@ -46,7 +46,7 @@ export type SeasonInput = {
   teams: Team[]; seasonDates: DateEntry[]; availability: Availability;
   homeAvailability: HomeAvailability; matchMode: MatchMode;
   maxMatchesPerDay: number; maxMatchesPerTeamPerDay: number;
-  distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; manualDistances?: ManualDistances; maxTripleDaysPerTeam: number; allTeamsOnFinalDay: boolean; allowRepeatPairPerDay?: boolean;
+  maxSeasonDays?: number; distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; manualDistances?: ManualDistances; maxTripleDaysPerTeam: number; allTeamsOnFinalDay: boolean; allowRepeatPairPerDay?: boolean;
   finalDayCandidate?: DateEntry; ignoredLateDates: number;
 };
 export type SearchProgress = { iterations: number; attempts: number; elapsedMs: number; bestDays: number | null; alternativesFound?: number; checkpoint?: PlanAlternative[]; foundSignatures?: string[] };
@@ -119,6 +119,16 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
       }
       const allMatches = generatePairings(teams, matchMode);
       const totalMatches = allMatches.length;
+      if(input.maxSeasonDays !== undefined) {
+        if(!Number.isInteger(input.maxSeasonDays)||input.maxSeasonDays<1||input.maxSeasonDays>1000){setError('Maximale Spieltage müssen eine ganze Zahl zwischen 1 und 1000 sein.');return;}
+        const finalDays=allTeamsOnFinalDay?1:0;
+        const regularDays=input.maxSeasonDays-finalDays;
+        const minimumByGames=finalDays+Math.ceil((totalMatches-(allTeamsOnFinalDay?teams.length/2:0))/maxMatchesPerDay);
+        const requiredPerTeam=(teams.length-1)*matchMode;
+        const capacityPerTeam=regularDays*Math.min(maxMatchesPerTeamPerDay,2)+(maxMatchesPerTeamPerDay>=3?Math.min(regularDays,maxTripleDaysPerTeam):0)+finalDays;
+        if(input.maxSeasonDays<minimumByGames||capacityPerTeam<requiredPerTeam){setError(`Spieltaglimit zu niedrig: Höchstens ${input.maxSeasonDays} Spieltage erlaubt. ${totalMatches} Spiele benötigen schon nach dem Tageslimit mindestens ${minimumByGames} Spieltage; jedes Team benötigt ${requiredPerTeam} Spiele, kann innerhalb des Limits aber höchstens ${capacityPerTeam} bestreiten. Erhöhe „Maximale Spieltage insgesamt“ oder passe die Spielelimits an. Der gemeinsame Abschluss zählt mit.`);return;}
+      }
+
 
       if (totalMatches > dates.length * maxMatchesPerDay) {
         setError(`Unmöglich: Die Gesamtanzahl der Spiele (${totalMatches}) übersteigt die maximale Kapazität von ${dates.length * maxMatchesPerDay} (${dates.length} Tage * ${maxMatchesPerDay} Spiele/Tag). Füge mehr Daten hinzu oder reduziere den Spielmodus.`);
@@ -274,6 +284,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
       const dateTimes = new Map(dates.map(d=>[d.id,Date.parse(d.value)]));
       const placements = (match: Match, current: Schedule) => dates.flatMap(date => {
         const day = current[date.id] || { matches: [], hostId: '' };
+        if (!current[date.id] && input.maxSeasonDays !== undefined && Object.keys(current).length >= input.maxSeasonDays) return [];
         if (day.matches.length >= maxMatchesPerDay || !availability[match.teamA]?.[date.id] || !availability[match.teamB]?.[date.id]) return [];
         if (!input.allowRepeatPairPerDay && day.matches.some(m => m.teamA === match.teamA && m.teamB === match.teamB)) return [];
         const count = (id: string) => day.matches.filter(m => m.teamA === id || m.teamB === id).length;
@@ -436,7 +447,7 @@ export function solveSeason(input: SeasonInput, options: SearchOptions, onProgre
       } else if (options.knownSignatures?.length && foundSignatures.size) {
         setError('Keine zusätzlichen Alternativen in diesem Suchlauf gefunden. Gespeicherte Pläne bleiben erhalten.');
       } else {
-        setError(searchStopped ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Versuche „Gründlich suchen“ oder exportiere die Eingaben zur Prüfung. Das beweist nicht, dass die Planung unmöglich ist." : `Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss, Drei-Spiele-Tage und die Verteilung der Heimspielmöglichkeiten. Eine ungleiche Heimspielverteilung ist kein Ausschlussgrund.`);
+        setError(searchStopped ? "Suchlimit erreicht: Noch kein gültiger Plan gefunden. Versuche „Gründlich suchen“ oder exportiere die Eingaben zur Prüfung. Das beweist nicht, dass die Planung unmöglich ist." : `Kein gültiger Spielplan für diese Bedingungen. Prüfe Verfügbarkeit, Saisonabschluss, Spieltaglimit, Drei-Spiele-Tage und die Verteilung der Heimspielmöglichkeiten. Eine ungleiche Heimspielverteilung ist kein Ausschlussgrund.`);
       }
 
   }

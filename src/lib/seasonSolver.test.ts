@@ -168,3 +168,16 @@ test('finale-only plan does not require locations, and search publishes retained
   let checkpoint=0;const result=solveSeason(fixture(4,5),{durationMs:100},p=>{if(p.checkpoint?.length)checkpoint=p.checkpoint.length;});
   assert.ok(result.schedule);assert.ok(checkpoint>0);
 });
+
+test('season-day cap is enforced and low caps give an actionable error',()=>{
+ const input=fixture(4,8);input.maxMatchesPerDay=3;input.maxMatchesPerTeamPerDay=2;input.maxSeasonDays=2;
+ const result=solveSeason(input,{durationMs:300});validate(input,result);assert.ok(Object.keys(result.schedule!).length<=2);
+ input.maxSeasonDays=1;assert.match(solveSeason(input,{durationMs:100}).error!,/Spieltaglimit zu niedrig/);
+ input.maxSeasonDays=0;assert.match(solveSeason(input,{durationMs:100}).error!,/ganze Zahl/);
+});
+test('the shared season finale counts towards the season-day cap',()=>{
+ const input=fixture(4,5,1,true);input.maxMatchesPerDay=3;input.maxSeasonDays=2;
+ assert.match(solveSeason(input,{durationMs:100}).error!,/mindestens 3 Spieltage/);
+ input.maxSeasonDays=3;const result=solveSeason(input,{durationMs:300});validate(input,result);
+ assert.equal(Object.keys(result.schedule!).length,3);assert.ok(result.schedule![input.finalDayCandidate!.id]);
+});

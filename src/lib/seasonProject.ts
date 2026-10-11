@@ -3,14 +3,14 @@ import type { Availability, DateEntry, HomeAvailability, MatchMode, PlanAlternat
 import { journeyKm, type RoadDistances, type ManualDistances } from './teamTravel';
 import { matchOrdinals } from './orderDayMatches';
 export type SeasonDraft = {
-  distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; manualDistances?: ManualDistances; seasonYear?: number; allowRepeatPairPerDay?: boolean; allTeamsOnFinalDay?: boolean; maxTripleDaysPerTeam?: number;
+  maxSeasonDays?: number; distanceMode?: 'air' | 'road'; roadDistances?: RoadDistances; manualDistances?: ManualDistances; seasonYear?: number; allowRepeatPairPerDay?: boolean; allTeamsOnFinalDay?: boolean; maxTripleDaysPerTeam?: number;
   teams: Team[]; dates: DateEntry[]; availability: Availability; homeAvailability: HomeAvailability;
   matchMode: MatchMode; maxMatchesPerDay: number; maxMatchesPerTeamPerDay: number;
 };
 export type SavedPlan = PlanAlternative & { id: string; draft: SeasonDraft; favorite: boolean; createdAt: string };
 export type SeasonProject = { format: 'turnierplaner-project'; version: 1; draft: SeasonDraft; plans: SavedPlan[]; selectedId: string | null; seen: Record<string, string[]>; holidayRegions: string[] };
 const stable = (value: unknown): string => Array.isArray(value) ? `[${value.map(stable).join(',')}]` : value && typeof value === 'object' ? `{${Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([k,v])=>`${JSON.stringify(k)}:${stable(v)}`).join(',')}}` : JSON.stringify(value) ?? 'null';
-export const draftKey = (draft: SeasonDraft) => stable({ ...draft, allowUnevenHomeDays: undefined, teams: [...draft.teams].sort((a,b)=>a.id.localeCompare(b.id)), dates: [...draft.dates].sort((a,b)=>a.id.localeCompare(b.id)), seasonYear: draft.seasonYear ?? 2026, allTeamsOnFinalDay: draft.allTeamsOnFinalDay ?? false, maxTripleDaysPerTeam: draft.maxTripleDaysPerTeam ?? 1 });
+export const draftKey = (draft: SeasonDraft) => stable({ ...draft, allowUnevenHomeDays: undefined, maxSeasonDays: draft.maxSeasonDays, teams: [...draft.teams].sort((a,b)=>a.id.localeCompare(b.id)), dates: [...draft.dates].sort((a,b)=>a.id.localeCompare(b.id)), seasonYear: draft.seasonYear ?? 2026, allTeamsOnFinalDay: draft.allTeamsOnFinalDay ?? false, maxTripleDaysPerTeam: draft.maxTripleDaysPerTeam ?? 1 });
 export const scheduleSignature = (schedule: Schedule) => Object.entries(schedule).sort(([a],[b])=>a.localeCompare(b)).map(([id,day])=>`${id}:${day.hostId}:${day.matches.map(m=>[m.teamA,m.teamB].sort().join('/')).sort().join(',')}`).join('|');
 export function planRank(plan: PlanAlternative, teams: Team[], dates: DateEntry[] = []): number[] {
   const days = Object.values(plan.schedule);
@@ -43,6 +43,7 @@ const integer=(x:unknown,min:number,max:number)=>Number.isInteger(x)&&Number(x)>
 const text=(x:unknown): x is string =>typeof x==='string'&&x.length>0&&x.length<1000;
 function validDraft(x: unknown): x is SeasonDraft {
   if(!obj(x)||!Array.isArray(x.teams)||x.teams.length<2||x.teams.length>100||!Array.isArray(x.dates)||x.dates.length>1000||!integer(x.matchMode,1,4)||!integer(x.maxMatchesPerDay,1,10)||!integer(x.maxMatchesPerTeamPerDay,1,3))return false;
+  if(x.maxSeasonDays!==undefined&&!integer(x.maxSeasonDays,1,1000))return false;
   if (x.manualDistances !== undefined && (!obj(x.manualDistances) || !Object.values(x.manualDistances).every(v=>obj(v)&&typeof v.placesKey==='string'&&typeof v.km==='number'&&Number.isFinite(v.km)&&v.km>=0&&v.km<=50000))) return false;
   if (x.distanceMode !== undefined && !['air','road'].includes(String(x.distanceMode))) return false;
   if (x.roadDistances !== undefined && (!obj(x.roadDistances) || typeof x.roadDistances.placesKey !== 'string' || !obj(x.roadDistances.km) || !Object.values(x.roadDistances.km).every(row=>obj(row)&&Object.values(row).every(n=>typeof n==='number'&&Number.isFinite(n)&&n>=0)))) return false;
@@ -57,6 +58,7 @@ function validPlan(x: unknown): x is SavedPlan {
   if(!obj(x)||!text(x.id)||typeof x.favorite!=='boolean'||!text(x.createdAt)||!validDraft(x.draft)||!obj(x.schedule)||!obj(x.report))return false;
   const input=seasonInput(x.draft), pairs=new Map<string,number>(), home:Record<string,number>={}, triples:Record<string,number>={};
   const allowed=new Set(input.seasonDates.map(d=>d.id));
+  if(input.maxSeasonDays!==undefined&&Object.keys(x.schedule).length>input.maxSeasonDays)return false;
   for(const [date,day] of Object.entries(x.schedule)) {
     if(!allowed.has(date)||!obj(day)||!Array.isArray(day.matches)||!text(day.hostId)||day.matches.length>input.maxMatchesPerDay)return false;
     const host=input.teams.find(t=>t.id===day.hostId);if(!host||!input.homeAvailability[host.id]?.[date]||!input.availability[host.id]?.[date])return false;
