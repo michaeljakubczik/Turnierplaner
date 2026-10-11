@@ -4,6 +4,7 @@ import type { PlanningTip } from '../lib/planningDiagnostics';
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Plus, 
+  MapPin,
   Trash2, 
   Calendar as CalendarIcon, 
   Users, 
@@ -535,8 +536,6 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                 </div>
                 <p className="text-[10px] opacity-50 font-mono uppercase">Maximale Anzahl an Spielen pro Team an einem Tag.</p>
               </div>
-            <button type="button" onClick={()=>setDistanceMenuOpen(true)} className="rounded bg-white/10 px-3 py-2 text-xs">Entfernungen eintragen</button>
-            <p className="text-xs text-gray-400">Standard: Luftlinie. Manuell eingetragene Wegstrecken ersetzen sie für das jeweilige Teampaar.</p>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={draft.allowRepeatPairPerDay ?? false} onChange={e=>setDraft(prev=>({...prev,allowRepeatPairPerDay:e.target.checked}))} /><span>Rückspiele am selben Tag erlauben</span></label>
             <label className="flex gap-3 items-start text-sm"><input type="checkbox" checked={allTeamsOnFinalDay} onChange={e => setDraft(prev => ({ ...prev, allTeamsOnFinalDay: e.target.checked }))} /><span>Alle Teams am letzten Spieltag: genau ein Spiel pro Team<br /><span className="text-xs text-gray-400">Ausgeschaltet: Teilnahme am Saisonabschluss optional.</span></span></label>
             <label className="block text-sm">Max. Drei-Spiele-Tage pro Team und Saison
@@ -547,14 +546,19 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
           {/* Teams */}
           <section className="space-y-4 glass-card p-6 rounded-3xl h-full">
-            <div className="flex items-center justify-between border-b border-white/10 pb-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-2">
               <div className="flex items-center gap-2">
                 <Users size={20} className="text-blue-400" />
                 <h2 className="font-bold text-xl">Teams</h2>
               </div>
-              <button onClick={addTeam} className="text-xs font-bold uppercase tracking-widest hover:text-blue-400 flex items-center gap-1 transition-colors">
-                <Plus size={14} /> Team hinzufügen
-              </button>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <button type="button" onClick={addTeam} className="text-xs font-bold uppercase tracking-widest hover:text-blue-400 flex items-center gap-1 transition-colors">
+                  <Plus size={14} /> Team hinzufügen
+                </button>
+                <button type="button" onClick={()=>setDistanceMenuOpen(true)} className="text-xs font-bold uppercase tracking-widest hover:text-blue-400 flex items-center gap-1 transition-colors">
+                  <MapPin size={14} /> Entfernungen eintragen <span className="text-[10px] font-normal normal-case tracking-normal text-gray-400">(optional)</span>
+                </button>
+              </div>
             </div>
             <div className="space-y-3">
               <AnimatePresence initial={false}>
