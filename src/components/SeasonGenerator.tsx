@@ -1,3 +1,4 @@
+import { workspaceStorageKey, workspaceFromProject, parseWorkspace, updateSeasonProject, addSeason, clearPlanArchive, restorePlanArchive, type SeasonWorkspace, type PlanArchive } from '../lib/seasonWorkspace';
 import { emptyPlanFilters, matchesPlanFilters, type PlanFilters } from '../lib/planFilters';
 import { seasonTravel } from '../lib/seasonTravel';
 import { teamDayCounts } from '../lib/seasonSpacing';
@@ -76,22 +77,33 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   };
 
   const storageBlocked = useRef(false);
-  const [project, setProject] = useState<SeasonProject>(() => {
+  const [workspace, setWorkspace] = useState<SeasonWorkspace>(() => {
     try {
+      const seasons = localStorage.getItem(workspaceStorageKey);
+      if (seasons) return parseWorkspace(JSON.parse(seasons));
       const stored = localStorage.getItem('turnierplaner_project_v1');
-      if (stored) {const p=parseProject(JSON.parse(stored));return {...p,draft:{...migrateTeamDayLimit(p.draft),distanceMode:'air' as const}};}
+      if (stored) return workspaceFromProject(parseProject(JSON.parse(stored)));
       const legacy = localStorage.getItem('matchmaster_season_draft_v2');
-      if (legacy) { const saved = JSON.parse(legacy); if (saved._schemaVersion === 1) return parseProject(emptyProject(saved.data)); }
+      if (legacy) { const saved = JSON.parse(legacy); if (saved._schemaVersion === 1) return workspaceFromProject(parseProject(emptyProject(saved.data))); }
     } catch { storageBlocked.current = true; }
-    return emptyProject(initialDraft);
+    return workspaceFromProject(emptyProject(initialDraft));
   });
+  const activeSeason = workspace.seasons.find(s => s.id === workspace.activeSeasonId)!;
+  const project = activeSeason.project;
+  // Capture the season ID so queued updates cannot leak into another season.
+  const setProject = (update: SeasonProject | ((previous: SeasonProject) => SeasonProject)) => setWorkspace(prev => updateSeasonProject(prev, activeSeason.id, update));
+  const [newSeasonName, setNewSeasonName] = useState('');
+  const [seasonName, setSeasonName] = useState(activeSeason.name);
+  useEffect(() => setSeasonName(activeSeason.name), [activeSeason.id, activeSeason.name]);
+  const [archiveUndo, setArchiveUndo] = useState<{seasonId: string; archive: PlanArchive} | null>(null);
   const [storageError, setStorageError] = useState<string | null>(null);
   const [projectNotice, setProjectNotice] = useState<string | null>(null);
   useEffect(() => {
     if (storageBlocked.current) { setStorageError('Der gespeicherte Browserstand konnte nicht gelesen werden und wurde nicht überschrieben. Bitte eine Projektdatei laden oder den neuen Stand als Datei sichern.'); return; }
-    try { localStorage.setItem('turnierplaner_project_v1', JSON.stringify(project)); setStorageError(null); }
+    try { localStorage.setItem(workspaceStorageKey, JSON.stringify(workspace));
+      localStorage.removeItem('turnierplaner_project_v1'); localStorage.removeItem('matchmaster_season_draft_v2'); setStorageError(null); }
     catch { setStorageError('Automatisches Speichern im Browser fehlgeschlagen. Bitte das Projekt herunterladen, um deinen Stand zu sichern.'); }
-  }, [project]);
+  }, [workspace]);
   const draft = project.draft;
   const setDraft = (update: SeasonDraft | ((previous: SeasonDraft) => SeasonDraft)) => setProject(prev => ({...prev, draft: typeof update === 'function' ? update(prev.draft) : update}));
   const isSaving = false;
@@ -119,21 +131,29 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const selectPlan = (index: number) => setProject(prev=>({...prev, selectedId: alternatives[index].id}));
   const inputFile = useRef<HTMLInputElement>(null);
   const saveProject = () => {
-    const snapshot = {...project, selectedId: selected?.id ?? null};
+    const snapshot = updateSeasonProject(workspace, activeSeason.id, {...project, selectedId: selected?.id ?? null});
     const url = URL.createObjectURL(new Blob([JSON.stringify(snapshot,null,2)], {type:'application/json'}));
-    const link = document.createElement('a'); link.href=url; link.download='turnierplaner-projekt.json'; link.click();
+    const link = document.createElement('a'); link.href=url; link.download='match-master-saisons.json'; link.click();
     setTimeout(()=>URL.revokeObjectURL(url),1000);
   };
   const loadProject = async (file?: File) => {
     if (!file) return;
     try {
       if (file.size > 25 * 1024 * 1024) throw new Error('Projektdatei zu groß (maximal 25 MB).');
-      const loaded = parseProject(JSON.parse(await file.text()));
-      (Object.values(placeRequests.current) as AbortController[]).forEach(r=>r.abort());
+      const value = JSON.parse(await file.text());
+      const loaded = parseWorkspace(value);
+      if (value.format === 'turnierplaner-project' && workspace.seasons.length >= 200) throw new Error('Maximal 200 Saisons möglich.');
+      resetSeasonUi();
       storageBlocked.current = false;
-      setProject({...loaded,draft:{...migrateTeamDayLimit(loaded.draft),distanceMode:'air'}}); setPlanView('all'); setCalendarTeamId(''); setAvailabilityUndo(null);
-      setPlaceChoices({}); setPlaceMessages({}); setError(null); setTips([]);
-      setProjectNotice('Projekt geladen. Eingaben, Spielpläne und Favoriten wurden wiederhergestellt.');
+      if (value.format === 'turnierplaner-project') {
+        const imported = {...loaded.seasons[0], name: file.name.replace(/\.json$/i, '').slice(0,100) || 'Importierte Saison'};
+        setWorkspace(prev => ({...prev,activeSeasonId:imported.id,seasons:[...prev.seasons,imported]}));
+        setProjectNotice('Projekt als zusätzliche Saison geladen. Bestehende Saisons bleiben erhalten.');
+      } else {
+        setWorkspace(loaded);
+        setProjectNotice('Alle Saisons aus der Datei wiederhergestellt.');
+      }
+
     } catch (e) { setProjectNotice(e instanceof Error ? e.message : 'Projektdatei konnte nicht geladen werden.'); }
     finally { if(inputFile.current) inputFile.current.value=''; }
   };
@@ -386,6 +406,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   };
   const solve = (thorough = false, continueSearch = false) => {
     workerRef.current?.terminate();
+    setArchiveUndo(null);
     setIsGenerating(true); setError(null); setTips([]);
     setSearchProgress({ iterations: 0, attempts: 0, elapsedMs: 0, bestDays: null });
     const durationMs = thorough ? 120000 : 30000;
@@ -476,6 +497,46 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     XLSX.writeFile(workbook, "Turnier_Spielplan.xlsx");
   };
 
+  const resetSeasonUi = () => {
+    workerRef.current?.terminate(); workerRef.current = null;
+    (Object.values(placeRequests.current) as AbortController[]).forEach(r=>r.abort());
+    setIsGenerating(false); setSearchProgress(null); setError(null); setTips([]);
+    setPlaceChoices({}); setPlaceMessages({}); setDistanceMenuOpen(false);
+    setAvailabilityUndo(null); setArchiveUndo(null); setCalendarTeamId('');
+    setPlanFilters(emptyPlanFilters); setFiltersOpen(false); setHighlightedTeams([]); setPlanView('all');
+  };
+  const switchSeason = (id: string) => {
+    if (id === activeSeason.id) return;
+    resetSeasonUi();
+    setWorkspace(prev=>({...prev,activeSeasonId:id}));
+    setProjectNotice(null);
+  };
+  const createSeason = () => {
+    if (!newSeasonName.trim()) return;
+    try {
+      const next = addSeason(workspace,newSeasonName,{...initialDraft,dates:[],availability:{},homeAvailability:{}});
+      resetSeasonUi(); setWorkspace(next); setNewSeasonName('');
+      setProjectNotice('Neue Saison angelegt. Teams, Termine und Spielpläne werden getrennt gespeichert.');
+    } catch(e) {setProjectNotice(e instanceof Error?e.message:'Saison konnte nicht angelegt werden.');}
+  };
+  const renameSeason = () => {
+    const name = seasonName.trim();
+    if (!name) {setSeasonName(activeSeason.name);return;}
+    setWorkspace(prev=>({...prev,seasons:prev.seasons.map(s=>s.id===activeSeason.id?{...s,name}:s)}));
+  };
+  const clearSavedPlans = () => {
+    workerRef.current?.terminate(); workerRef.current = null;
+    setIsGenerating(false); setSearchProgress(null); setError(null); setTips([]);
+    setArchiveUndo({seasonId:activeSeason.id,archive:{plans:project.plans,seen:project.seen,selectedId:project.selectedId}});
+    setProject(clearPlanArchive); setPlanFilters(emptyPlanFilters); setHighlightedTeams([]);
+    setProjectNotice(`Spielplanspeicher für „${activeSeason.name}“ geleert. Eingaben bleiben erhalten. Rückgängig ist bis zum nächsten Suchlauf oder Saisonwechsel möglich.`);
+  };
+  const undoArchiveClear = () => {
+    if (!archiveUndo || archiveUndo.seasonId !== activeSeason.id) return;
+    setProject(prev=>restorePlanArchive(prev,archiveUndo.archive));
+    setArchiveUndo(null); setPlanView('all'); setProjectNotice('Gespeicherte Spielpläne und Favoriten wiederhergestellt.');
+  };
+
   return (
     <div className="min-h-screen bg-[#1C1F2A] text-white font-sans selection:bg-blue-500 selection:text-white">
       {storageError && <p role="alert" className="bg-amber-500/20 p-3 text-sm">{storageError}</p>}
@@ -520,6 +581,27 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
       </header>
 
       <main className="p-4 sm:p-6 lg:p-10 max-w-7xl mx-auto space-y-10">
+        <section aria-label="Saisons verwalten" className="glass-card p-5 rounded-3xl space-y-4">
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="space-y-1 flex-1 min-w-48"><span className="block text-sm text-gray-400">Aktive Saison / Altersklasse</span>
+              <select aria-label="Saison wechseln" value={activeSeason.id} onChange={e=>switchSeason(e.target.value)} className="w-full bg-[#252938] rounded-lg px-3 py-2">
+                {workspace.seasons.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}
+              </select>
+            </label>
+            <label className="space-y-1 flex-1 min-w-48"><span className="block text-sm text-gray-400">Saisonname</span>
+              <input aria-label="Saisonname" maxLength={100} value={seasonName} onChange={e=>setSeasonName(e.target.value)} onBlur={renameSeason} onKeyDown={e=>{if(e.key==='Enter')e.currentTarget.blur();}} className="w-full bg-[#252938] rounded-lg px-3 py-2" />
+            </label>
+            <div className="flex flex-wrap gap-2 items-center">
+              <input aria-label="Name der neuen Saison" maxLength={100} placeholder="z. B. U16 · 2027" value={newSeasonName} onChange={e=>setNewSeasonName(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')createSeason();}} className="bg-[#252938] rounded-lg px-3 py-2 w-44" />
+              <button disabled={!newSeasonName.trim()} onClick={createSeason} className="rounded-full bg-blue-500/20 px-4 py-2 text-xs font-bold disabled:opacity-40">Neue Saison</button>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs text-gray-400">{project.plans.length} gespeicherte Spielpläne in dieser Saison. Projektdateien sichern alle {workspace.seasons.length} Saisons.</span>
+            <button disabled={!project.plans.length} onClick={clearSavedPlans} className="rounded-full bg-red-500/10 text-red-400 px-4 py-2 text-xs font-bold disabled:opacity-40">Spielplanspeicher löschen</button>
+            {archiveUndo?.seasonId===activeSeason.id && <button onClick={undoArchiveClear} className="rounded-full bg-white/10 px-4 py-2 text-xs font-bold">Löschen rückgängig machen</button>}
+          </div>
+        </section>
         <fieldset disabled={isGenerating} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Spielmodus */}
           <section className="space-y-6 glass-card p-6 rounded-3xl h-full">
