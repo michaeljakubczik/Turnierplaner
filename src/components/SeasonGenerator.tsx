@@ -94,6 +94,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   const draft = project.draft;
   const setDraft = (update: SeasonDraft | ((previous: SeasonDraft) => SeasonDraft)) => setProject(prev => ({...prev, draft: typeof update === 'function' ? update(prev.draft) : update}));
   const isSaving = false;
+  const [highlightedTeams, setHighlightedTeams] = useState<string[]>([]);
   const [planView, setPlanView] = useState<'best' | 'favorites' | 'all'>(project.selectedId ? 'all' : 'best');
   const currentKey = draftKey(draft);
   const currentSeasonDates = seasonInput(draft).seasonDates;
@@ -423,6 +424,18 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
   };
 
   const getTeamName = (id: string) => resultTeams.find(t => t.id === id)?.name || id;
+  const teamMarkerProps = (id: string) => {
+    const marked=highlightedTeams.includes(id);
+    const colors=['#fbbf24','#60a5fa','#34d399','#c084fc','#fb7185','#22d3ee','#fb923c','#a3e635'];
+    const color=colors[Math.max(0,resultTeams.findIndex(t=>t.id===id))%colors.length];
+    const toggle=()=>setHighlightedTeams(prev=>prev.includes(id)?prev.filter(t=>t!==id):[...prev,id]);
+    return {
+      role:'button' as const, tabIndex:0, 'aria-pressed':marked,
+      'aria-label':`${getTeamName(id)} markieren`, title:'Team markieren / Markierung aufheben',
+      onClick:toggle, onKeyDown:(event:React.KeyboardEvent<HTMLSpanElement>)=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();toggle();}},
+      style:marked?{backgroundColor:`${color}33`,color,boxShadow:`inset 0 0 0 1px ${color}`} : undefined
+    };
+  };
 
   const downloadExcel = () => {
     if (!schedule) return;
@@ -725,28 +738,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                       {isOldPlan && <p className="w-full text-amber-300 text-sm">Zu früheren Einstellungen erstellt. Anzeige und Excel verwenden die damals gespeicherten Eingaben.</p>}
                       <p className="w-full text-xs text-gray-400">Eine vollständige Suche oder globale Bestlösung wird nicht garantiert. Alle gespeicherten Pläne bleiben erhalten.</p>
                     </div>
-                    <div className="w-full flex flex-wrap gap-2">{resultTeams.map(t => <span key={t.id} className="text-xs rounded bg-white/5 px-2 py-1">{t.name}: {resultTeamDays[t.id] || 0} Spieltage insgesamt · {report.homeGameDistribution[t.id] || 0} davon Heimspieltage</span>)}</div>
-                    {resultTravel && <div className="w-full space-y-2 text-xs">
-                      <p className="font-medium">Anreise über die Saison · Hin- und Rückfahrt: {resultTravel.totalKm.toLocaleString('de-DE',{maximumFractionDigits:0})} km insgesamt{resultTravel.unknownTrips>0?' (unvollständig)':''}</p>
-                      <div className="flex flex-wrap gap-2">{resultTeams.map(t=>{const row=resultTravel.byTeam[t.id];return <div key={t.id} className="rounded bg-white/5 px-2 py-1"><p>{t.name}: {row.km.toLocaleString('de-DE',{maximumFractionDigits:0})} km{row.unknownTrips>0?' + unbekannte Strecken':''}</p><p className="text-gray-400">Besucht: {resultTeams.length-1-row.missingHosts.length}/{resultTeams.length-1} Gastgeber{row.missingHosts.length>0?` · Noch ohne Besuch: ${row.missingHosts.map(id=>resultTeams.find(t=>t.id===id)!.name).join(', ')}`:''}</p><p className="text-gray-400">{Object.entries(row.visits).map(([id,n])=>`${resultTeams.find(t=>t.id===id)!.name}: ${n}×`).join(" · ")||"Keine Auswärtsspieltage"}</p></div>})}</div>
-                      <p className="text-gray-400">Pro Auswärtsspieltag eine Hin- und Rückfahrt, unabhängig von der Spielezahl. Eingetragene Wegstrecken haben Vorrang; sonst dient die Luftlinie als Schätzung. Heimspieltage zählen mit 0 km. Fehlende Gastgeberbesuche verhindern keinen gültigen Plan.</p>
-                    </div>}
+
                   </div>
-                  <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
-                    {[
-                      { label: 'Spieltage', value: report.matchesPerDay.length },
-                      { label: 'Paarungen', value: (resultTeams.length * (resultTeams.length - 1)) / 2 },
-                      { label: 'Gesamtspiele', value: report.matchesPerDay.reduce((a, b) => a + b, 0) },
-                      { label: 'Ø Spiele/Tag', value: (report.matchesPerDay.reduce((a, b) => a + b, 0) / report.matchesPerDay.length).toFixed(1) },
-                      { label: 'Max Last/Team', value: report.maxMatchesPerTeamPerDay },
-                      { label: 'Bedingungen', value: 'Gültig', color: 'text-emerald-400' }
-                    ].map((stat, i) => (
-                      <div key={i} className="glass-card p-4 rounded-xl space-y-1">
-                        <p className="text-[10px] font-mono uppercase opacity-50">{stat.label}</p>
-                        <p className={`text-2xl font-bold ${stat.color || 'text-white'}`}>{stat.value}</p>
-                      </div>
-                    ))}
-                  </div>
+
 
                   <div className="space-y-4">
                     <div className="flex items-center justify-between border-b border-white/10 pb-2">
@@ -767,7 +761,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                               <h3 className="font-mono text-sm font-bold text-blue-400">{formatDate(dateEntry.value)}</h3>
                               <div className="flex items-center gap-1.5 mt-0.5">
                                 <span className="text-[9px] font-mono uppercase opacity-40">Austragungsort:</span>
-                                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider">{getTeamName(schedule[dateEntry.id]?.hostId)}</span>
+                                <span {...teamMarkerProps(schedule[dateEntry.id].hostId)} className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider cursor-pointer rounded focus-visible:outline focus-visible:outline-1">{getTeamName(schedule[dateEntry.id]?.hostId)}</span>
                               </div>
                             </div>
                             <span className="text-[10px] font-mono uppercase bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded border border-blue-500/30">
@@ -778,9 +772,8 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                             {resultTeams.filter(t => schedule[dateEntry.id].matches.some(m => m.teamA === t.id || m.teamB === t.id)).map(t => {
                               const day = schedule[dateEntry.id];
                               const host = resultTeams.find(h => h.id === day.hostId)!;
-                              const km = journeyKm(t,host,selected?.draft ?? draft);
                               const count = day.matches.filter(m => m.teamA === t.id || m.teamB === t.id).length;
-                              return <span key={t.id} className="text-xs text-gray-300 bg-white/5 rounded px-2 py-1">{t.name}: {count} {count === 1 ? 'Spiel' : 'Spiele'} · {t.id === host.id ? 'Gastgeber' : `${km === null ? 'Entfernung unbekannt' : Math.round(km) + (manualKm(t,host,selected?.draft ?? draft)!==null?' km eingetragen':selected?.draft.distanceMode==='road'?' km Straße':' km Luftlinie')}${km !== null && km > 100 ? ' (weite Anreise)' : ''}`}</span>;
+                              return <span key={t.id} {...teamMarkerProps(t.id)} className="text-xs text-gray-300 bg-white/5 rounded px-2 py-1 cursor-pointer focus-visible:outline focus-visible:outline-1">{t.name}: {count} {count === 1 ? 'Spiel' : 'Spiele'}{t.id === host.id ? ' · Gastgeber' : ''}</span>;
                             })}
                           </div>
                           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -790,9 +783,9 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                               <div key={i} className="glass-card p-3 rounded-lg flex flex-col items-center justify-center text-center group hover:border-blue-500/50 transition-all">
                                 <span className="text-[9px] font-mono opacity-30 mb-1">SPIEL {i + 1}</span>
                                 <div className="flex items-center gap-2 w-full">
-                                  <span className="flex-1 text-xs font-bold truncate">{getTeamName(match.teamA)}</span>
+                                  <span {...teamMarkerProps(match.teamA)} className="flex-1 min-w-0 text-xs font-bold truncate cursor-pointer rounded focus-visible:outline focus-visible:outline-1">{getTeamName(match.teamA)}</span>
                                   <span className="text-[10px] italic opacity-40">vs</span>
-                                  <span className="flex-1 text-xs font-bold truncate">{getTeamName(match.teamB)}</span>
+                                  <span {...teamMarkerProps(match.teamB)} className="flex-1 min-w-0 text-xs font-bold truncate cursor-pointer rounded focus-visible:outline focus-visible:outline-1">{getTeamName(match.teamB)}</span>
                                 </div>
                                 <span className={`mt-2 text-[10px] ${ordinal.a === ordinal.b ? 'text-emerald-400' : 'text-amber-400'}`}>{ordinal.a}. Spiel ↔ {ordinal.b}. Spiel</span>
                               </div>
@@ -808,6 +801,27 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
                       <BarChart3 size={18} className="text-blue-400" />
                       <h2 className="font-bold text-lg">Validierungs- & Balance-Bericht</h2>
                     </div>
+                  <div className="grid grid-cols-2 md:grid-cols-6 gap-4">
+                    {[
+                      { label: 'Spieltage', value: report.matchesPerDay.length },
+                      { label: 'Paarungen', value: (resultTeams.length * (resultTeams.length - 1)) / 2 },
+                      { label: 'Gesamtspiele', value: report.matchesPerDay.reduce((a, b) => a + b, 0) },
+                      { label: 'Ø Spiele/Tag', value: (report.matchesPerDay.reduce((a, b) => a + b, 0) / report.matchesPerDay.length).toFixed(1) },
+                      { label: 'Max Last/Team', value: report.maxMatchesPerTeamPerDay },
+                      { label: 'Bedingungen', value: 'Gültig', color: 'text-emerald-400' }
+                    ].map((stat, i) => (
+                      <div key={i} className="glass-card p-4 rounded-xl space-y-1">
+                        <p className="text-[10px] font-mono uppercase opacity-50">{stat.label}</p>
+                        <p className={`text-2xl font-bold ${stat.color || 'text-white'}`}>{stat.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                    <div className="w-full flex flex-wrap gap-2">{resultTeams.map(t => <span key={t.id} className="text-xs rounded bg-white/5 px-2 py-1">{t.name}: {resultTeamDays[t.id] || 0} Spieltage insgesamt · {report.homeGameDistribution[t.id] || 0} davon Heimspieltage</span>)}</div>
+                    {resultTravel && <div className="w-full space-y-2 text-xs">
+                      <p className="font-medium">Anreise über die Saison · Hin- und Rückfahrt: {resultTravel.totalKm.toLocaleString('de-DE',{maximumFractionDigits:0})} km insgesamt{resultTravel.unknownTrips>0?' (unvollständig)':''}</p>
+                      <div className="flex flex-wrap gap-2">{resultTeams.map(t=>{const row=resultTravel.byTeam[t.id];return <div key={t.id} className="rounded bg-white/5 px-2 py-1"><p>{t.name}: {row.km.toLocaleString('de-DE',{maximumFractionDigits:0})} km{row.unknownTrips>0?' + unbekannte Strecken':''}</p><p className="text-gray-400">Besucht: {resultTeams.length-1-row.missingHosts.length}/{resultTeams.length-1} Gastgeber{row.missingHosts.length>0?` · Noch ohne Besuch: ${row.missingHosts.map(id=>resultTeams.find(t=>t.id===id)!.name).join(', ')}`:''}</p><p className="text-gray-400">{Object.entries(row.visits).map(([id,n])=>`${resultTeams.find(t=>t.id===id)!.name}: ${n}×`).join(" · ")||"Keine Auswärtsspieltage"}</p></div>})}</div>
+                      <p className="text-gray-400">Pro Auswärtsspieltag eine Hin- und Rückfahrt, unabhängig von der Spielezahl. Eingetragene Wegstrecken haben Vorrang; sonst dient die Luftlinie als Schätzung. Heimspieltage zählen mit 0 km. Fehlende Gastgeberbesuche verhindern keinen gültigen Plan.</p>
+                    </div>}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-3">
                         <div className="flex justify-between items-center text-xs">
