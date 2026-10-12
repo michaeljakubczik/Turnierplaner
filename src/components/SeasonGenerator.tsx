@@ -1,3 +1,4 @@
+import { aiPlanningPrompt, aiPlanBundle, aiExportStem } from '../lib/seasonAiExport';
 import { workspaceStorageKey, workspaceFromProject, parseWorkspace, updateSeasonProject, addSeason, clearPlanArchive, restorePlanArchive, type SeasonWorkspace, type PlanArchive } from '../lib/seasonWorkspace';
 import { emptyPlanFilters, matchesPlanFilters, type PlanFilters } from '../lib/planFilters';
 import { seasonTravel } from '../lib/seasonTravel';
@@ -497,6 +498,12 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
     XLSX.writeFile(workbook, "Turnier_Spielplan.xlsx");
   };
 
+  const downloadAiFile = (content: string, suffix: string, type: string) => {
+    const url = URL.createObjectURL(new Blob([content],{type}));
+    const link = document.createElement('a'); link.href=url; link.download=`${aiExportStem(activeSeason.name)}-${suffix}`; link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  };
+
   const resetSeasonUi = () => {
     workerRef.current?.terminate(); workerRef.current = null;
     (Object.values(placeRequests.current) as AbortController[]).forEach(r=>r.abort());
@@ -598,8 +605,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-xs text-gray-400">{project.plans.length} gespeicherte Spielpläne in dieser Saison. Projektdateien sichern alle {workspace.seasons.length} Saisons.</span>
-            <button disabled={!project.plans.length} onClick={clearSavedPlans} className="rounded-full bg-red-500/10 text-red-400 px-4 py-2 text-xs font-bold disabled:opacity-40">Spielplanspeicher löschen</button>
-            {archiveUndo?.seasonId===activeSeason.id && <button onClick={undoArchiveClear} className="rounded-full bg-white/10 px-4 py-2 text-xs font-bold">Löschen rückgängig machen</button>}
+
           </div>
         </section>
         <fieldset disabled={isGenerating} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -723,7 +729,7 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
             <div className="flex flex-wrap items-center gap-3">
               <h2 className="font-bold text-xl">Team-Verfügbarkeit</h2>
               <label>Jahr <select aria-label="Saisonjahr" value={seasonYear} onChange={e => setDraft(prev => ({ ...prev, seasonYear: Number(e.target.value), dates: [], availability: {}, homeAvailability: {} }))} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{Array.from({ length: 12 }, (_, i) => new Date().getFullYear() - 1 + i).concat(seasonYear).filter((v, i, a) => a.indexOf(v) === i).sort().map(y => <option key={y}>{y}</option>)}</select></label>
-              <label>Team <select aria-label="Kalenderteam" value={activeTeamId} onChange={e => setCalendarTeamId(e.target.value)} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{teams.map(t => <option key={t.id} value={`team:${t.id}`}>{t.name}</option>)}</select></label>
+              <label>Team <select aria-label="Kalenderteam" value={activeTeamId} onChange={e => setCalendarTeamId(e.target.value)} className="bg-[#1C1F2A] border border-white/20 rounded p-1 ml-2">{teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
               <span className="text-xs text-gray-400">{dates.length} mögliche Termine ausgewählt</span>
 
             </div>
@@ -799,6 +805,15 @@ export default function SeasonGenerator({ onBack }: SeasonGeneratorProps) {
 
         {/* Results Section */}
         <div className="space-y-10">
+          <section aria-label="Spielplanspeicher und KI-Downloads" className="glass-card rounded-xl p-4 space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={()=>downloadAiFile(aiPlanningPrompt(project,activeSeason.name),'ki-prompt.txt','text/plain;charset=utf-8')} className="rounded bg-blue-500/15 text-blue-200 px-3 py-2 text-sm">KI-Planungsprompt herunterladen</button>
+              <button disabled={!project.plans.length} onClick={()=>downloadAiFile(JSON.stringify(aiPlanBundle(project,activeSeason.name),null,2),'spielplaene-ki.json','application/json')} className="rounded bg-blue-500/15 text-blue-200 px-3 py-2 text-sm disabled:opacity-40">Alle Spielpläne für KI herunterladen ({project.plans.length})</button>
+            <button disabled={!project.plans.length} onClick={clearSavedPlans} className="rounded-full bg-red-500/10 text-red-400 px-4 py-2 text-xs font-bold disabled:opacity-40">Spielplanspeicher löschen</button>
+            {archiveUndo?.seasonId===activeSeason.id && <button onClick={undoArchiveClear} className="rounded-full bg-white/10 px-4 py-2 text-xs font-bold">Löschen rückgängig machen</button>}
+            </div>
+            <p className="text-xs text-gray-400">Prompt und Pläne gemeinsam an eine KI geben: Eingaben, harte Regeln und Rangfolge sind enthalten. Der Plan-Download umfasst alle gespeicherten Pläne dieser Saison, unabhängig von Filtern; frühere Einstellungen werden gekennzeichnet. Favoriten und Plan-IDs bleiben erhalten.</p>
+          </section>
           {project.plans.length > 0 && <div className="flex flex-wrap gap-2"><button onClick={()=>setPlanView('best')} className="rounded bg-white/10 px-3 py-2 text-sm">Beste zwölf</button><button onClick={()=>setPlanView('favorites')} className="rounded bg-white/10 px-3 py-2 text-sm">★ Favoriten ({project.plans.filter(p=>p.favorite).length})</button><button onClick={()=>setPlanView('all')} className="rounded bg-white/10 px-3 py-2 text-sm">Alle gespeicherten ({project.plans.length})</button></div>}
           {project.plans.length>0 && <div className="glass-card rounded-xl p-4 space-y-3">
             <div className="flex flex-wrap items-center gap-3">
